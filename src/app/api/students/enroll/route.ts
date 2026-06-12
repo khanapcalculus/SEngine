@@ -13,7 +13,7 @@ import { parseEnrollStudent } from "../../../../lib/validation";
 import { json, handleError } from "../../../../lib/http";
 import { enrollStudent } from "../../../../modules/sis/student.service";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 export async function POST(req: Request): Promise<Response> {
   try {

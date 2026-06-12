@@ -1,0 +1,14 @@
+Login failed (500) and console error: 
+0t7k6yhe05hf6.js:1 
+ POST https://sengine-phi.vercel.app/api/auth/login 500 (Internal Server Error)
+f	@	0t7k6yhe05hf6.js:1
+sJ	@	2nykiepra7i1k.js:1
+(anonymous)	@	2nykiepra7i1k.js:1
+tD	@	2nykiepra7i1k.js:1
+s4	@	2nykiepra7i1k.js:1
+fz	@	2nykiepra7i1k.js:1
+fT	@	2nykiepra7i1k.js:1
+
+
+Invalid email or password
+0t7k6yhe05hf6.js:1  POST https://sengine-phi.vercel.app/api/auth/login 401 (Unauthorized)

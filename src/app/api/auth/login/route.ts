@@ -13,7 +13,7 @@ import { parseLogin } from "../../../../lib/validation";
 import { json, handleError } from "../../../../lib/http";
 import { login, LoginError } from "../../../../modules/auth/auth.service";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 const TTL_SECONDS = 60 * 60 * 8; // 8-hour session
 

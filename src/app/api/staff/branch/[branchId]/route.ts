@@ -9,7 +9,7 @@ import { isUuid } from "../../../../../lib/validation";
 import { json, handleError } from "../../../../../lib/http";
 import { getActiveStaffForBranch } from "../../../../../modules/hr/staff.service";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 export async function GET(
   req: Request,
