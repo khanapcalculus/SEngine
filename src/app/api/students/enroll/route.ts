@@ -31,7 +31,10 @@ export async function POST(req: Request): Promise<Response> {
     // Branch managers may only enroll into their own tenant.
     assertBranchScope(ctx, input.orgId);
 
-    const result = await enrollStudent(getDb(), input);
+    const result = await enrollStudent(getDb(), input, {
+      userId: ctx.userId,
+      orgId: ctx.orgId,
+    });
     return json(result, 201);
   } catch (err) {
     return handleError(err);

@@ -11,6 +11,13 @@ import type { DB } from "../../db/client";
 import { users, staffProfiles } from "../../db/schema";
 import type { OnboardStaffInput } from "../../lib/validation";
 import { ValidationError } from "../../lib/validation";
+import { writeAudit } from "../audit/audit.service";
+
+/** The authenticated caller performing a mutation (for the audit trail). */
+export interface Actor {
+  userId: string;
+  orgId: string | null;
+}
 
 export interface OnboardedStaff {
   userId: string;
@@ -28,6 +35,7 @@ export interface OnboardedStaff {
 export async function onboardStaff(
   db: DB,
   input: OnboardStaffInput,
+  actor: Actor,
 ): Promise<OnboardedStaff> {
   return db.transaction(async (tx) => {
     const existing = await tx
@@ -64,6 +72,16 @@ export async function onboardStaff(
         status: "onboarding",
       })
       .returning({ id: staffProfiles.id });
+
+    await writeAudit(tx, {
+      actorId: actor.userId,
+      orgId: input.orgId,
+      branchId: input.branchId,
+      action: "staff.onboard",
+      entityType: "staff_profile",
+      entityId: profile.id,
+      summary: `Onboarded staff ${input.fullName} (${input.email}), ${input.department}`,
+    });
 
     return {
       userId: user.id,

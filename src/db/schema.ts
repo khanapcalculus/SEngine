@@ -302,6 +302,44 @@ export const enrollments = pgTable(
   }),
 );
 
+/* ──────────────────────────── Audit Logs ───────────────────────── */
+/**
+ * Module 1 — immutable audit trail. Append-only record of state changes
+ * (staff onboarding, enrollment, class assignment, etc.). No update/delete
+ * paths exist in the app: rows are written once and only ever read.
+ *
+ * actorId is the authenticated user who performed the action (nullable so the
+ * log survives if that user is later deleted). action is a dotted verb like
+ * "staff.onboard"; entityType/entityId point at the affected row.
+ */
+export const auditLogs = pgTable(
+  "audit_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    actorId: uuid("actor_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    orgId: uuid("org_id"),
+    branchId: uuid("branch_id"),
+    action: varchar("action", { length: 64 }).notNull(),
+    entityType: varchar("entity_type", { length: 64 }).notNull(),
+    entityId: uuid("entity_id"),
+    summary: text("summary").notNull(),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // Newest-first feed per branch (the dashboard view).
+    branchCreatedIdx: index("audit_logs_branch_created_idx").on(
+      t.branchId,
+      t.createdAt,
+    ),
+    actorIdx: index("audit_logs_actor_idx").on(t.actorId),
+  }),
+);
+
 /* ──────────────────────────── Relations ────────────────────────── */
 /** Drizzle relational query graph (enables db.query.* eager loading). */
 

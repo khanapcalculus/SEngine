@@ -224,3 +224,30 @@ export function parseLogin(body: unknown): LoginInput {
 
   return { email, password };
 }
+
+export interface CreateClassInput {
+  subject: string;
+  term: string;
+  branchId: string;
+}
+
+/** Validate the POST /api/classes body. */
+export function parseCreateClass(body: unknown): CreateClassInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  const subject = typeof b.subject === "string" ? b.subject.trim() : "";
+  if (subject.length < 1 || subject.length > 255)
+    fields.subject = "subject required (1-255 chars)";
+
+  const term = typeof b.term === "string" ? b.term.trim() : "";
+  if (term.length < 1 || term.length > 64)
+    fields.term = "term required (1-64 chars)";
+
+  if (!isUuid(b.branchId)) fields.branchId = "branchId must be a UUID";
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { subject, term, branchId: b.branchId as string };
+}

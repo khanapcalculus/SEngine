@@ -17,6 +17,13 @@ import type {
   AssignClassInput,
 } from "../../lib/validation";
 import { ValidationError } from "../../lib/validation";
+import { writeAudit } from "../audit/audit.service";
+
+/** The authenticated caller performing a mutation (for the audit trail). */
+export interface Actor {
+  userId: string;
+  orgId: string | null;
+}
 
 export interface EnrolledStudent {
   userId: string;
@@ -32,6 +39,7 @@ export interface EnrolledStudent {
 export async function enrollStudent(
   db: DB,
   input: EnrollStudentInput,
+  actor: Actor,
 ): Promise<EnrolledStudent> {
   return db.transaction(async (tx) => {
     const existing = await tx
@@ -68,6 +76,16 @@ export async function enrollStudent(
       })
       .returning({ id: studentProfiles.id });
 
+    await writeAudit(tx, {
+      actorId: actor.userId,
+      orgId: input.orgId,
+      branchId: input.branchId,
+      action: "student.enroll",
+      entityType: "student_profile",
+      entityId: profile.id,
+      summary: `Enrolled student ${input.fullName} (${input.email}), cohort ${input.cohortYear}`,
+    });
+
     return {
       userId: user.id,
       studentProfileId: profile.id,
@@ -75,6 +93,39 @@ export async function enrollStudent(
       cohortYear: input.cohortYear,
     };
   });
+}
+
+export interface StudentRow {
+  studentProfileId: string;
+  userId: string;
+  fullName: string;
+  email: string;
+  cohortYear: number;
+  status: string;
+}
+
+/** Active students in a branch, joined to their user identity. */
+export async function getActiveStudentsForBranch(
+  db: DB,
+  branchId: string,
+): Promise<StudentRow[]> {
+  return db
+    .select({
+      studentProfileId: studentProfiles.id,
+      userId: users.id,
+      fullName: users.fullName,
+      email: users.email,
+      cohortYear: studentProfiles.cohortYear,
+      status: studentProfiles.status,
+    })
+    .from(studentProfiles)
+    .innerJoin(users, eq(studentProfiles.userId, users.id))
+    .where(
+      and(
+        eq(studentProfiles.branchId, branchId),
+        eq(studentProfiles.status, "active"),
+      ),
+    );
 }
 
 export interface AssignmentResult {
@@ -94,6 +145,7 @@ export interface AssignmentResult {
 export async function assignStudentToClass(
   db: DB,
   input: AssignClassInput,
+  actor: Actor,
 ): Promise<AssignmentResult> {
   return db.transaction(async (tx) => {
     const [student] = await tx
@@ -149,6 +201,16 @@ export async function assignStudentToClass(
         status: "enrolled",
       })
       .returning({ id: enrollments.id });
+
+    await writeAudit(tx, {
+      actorId: actor.userId,
+      orgId: actor.orgId,
+      branchId: klass.branchId,
+      action: "class.assign",
+      entityType: "enrollment",
+      entityId: row.id,
+      summary: `Assigned student ${input.studentId} to class ${input.classId}`,
+    });
 
     return {
       enrollmentId: row.id,

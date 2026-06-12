@@ -25,7 +25,10 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     const input = parseAssignClass(raw);
-    const result = await assignStudentToClass(getDb(), input);
+    const result = await assignStudentToClass(getDb(), input, {
+      userId: ctx.userId,
+      orgId: ctx.orgId,
+    });
     return json(result, 201);
   } catch (err) {
     return handleError(err);
