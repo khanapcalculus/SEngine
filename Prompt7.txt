@@ -1,0 +1,25 @@
+VM81:1 Uncaught TypeError: window.__chromium_devtools_metrics_reporter is not a function
+    at le (<anonymous>:1:13874)
+    at <anonymous>:1:14248
+    at <anonymous>:1:16266
+le @ VM81:1
+(anonymous) @ VM81:1
+(anonymous) @ VM81:1
+VM82:1 Uncaught TypeError: window.__chromium_devtools_metrics_reporter is not a function
+    at le (<anonymous>:1:13874)
+    at <anonymous>:1:14248
+    at <anonymous>:1:16266
+le @ VM82:1
+(anonymous) @ VM82:1
+(anonymous) @ VM82:1
+VM83:1 Uncaught TypeError: window.__chromium_devtools_metrics_reporter is not a function
+    at le (<anonymous>:1:13874)
+    at <anonymous>:1:14248
+    at <anonymous>:1:16266
+le @ VM83:1
+(anonymous) @ VM83:1
+(anonymous) @ VM83:1
+VM84:1 Uncaught TypeError: window.__chromium_devtools_metrics_reporter is not a function
+    at le (<anonymous>:1:13874)
+    at <anonymous>:1:14248
+    at <anonymous>:1:16266

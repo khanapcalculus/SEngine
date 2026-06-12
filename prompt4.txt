@@ -1,0 +1,7 @@
+echo "Excellent judgment on the cross-branch isolation. Approved." > prompt4.txt
+echo "Phase 4: Module 4 (Advanced LMS & Real-Time Classroom). Act as Lead Edge Engineer." >> prompt4.txt
+echo "Task 1: Scaffold the Cloudflare Durable Object class to handle WebSocket connections for the Real-Time Collaboration (RTC) whiteboard." >> prompt4.txt
+echo "Task 2: Build a secure endpoint POST /api/ai/tutor-copilot to route whiteboard context and educator queries to the Gemma 4 AI model." >> prompt4.txt
+echo "Constraint 1: Optimize the Gemma 4 system prompt structure to generate step-by-step reasoning and mathematical derivations (e.g., handling matrix operations, differential equations, or thermodynamic formulas) to assist the tutor." >> prompt4.txt
+echo "Constraint 2: Enforce strict RBAC on the AI endpoint (Educators, BranchManagers, SuperAdmins only). Students cannot query the AI directly." >> prompt4.txt
+echo "Do not build the frontend React canvas yet. Output the Durable Object code, the AI route, and the Vitest mocks." >> prompt4.txt

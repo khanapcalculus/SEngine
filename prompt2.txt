@@ -1,0 +1,6 @@
+echo "Phase 2: Module 2 (HR & Staff) Backend APIs. Act as Lead Backend Engineer." > prompt2.txt
+echo "1. Build Next.js POST /api/staff/onboard route to create a User and Staff_Profile in a database transaction." >> prompt2.txt
+echo "2. Build GET /api/staff/branch/[branchId] route to fetch active staff for a branch." >> prompt2.txt
+echo "Constraints: Strict RBAC (SuperAdmin or BranchManager only). Validate JSON body." >> prompt2.txt
+echo "Do not build any React frontend UI. Write Vitest API tests for these endpoints." >> prompt2.txt
+echo "Output the code and the terminal command to run the new tests." >> prompt2.txt

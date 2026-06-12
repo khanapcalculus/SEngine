@@ -1,0 +1,24 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next
+/out
+/build
+
+# vercel
+.vercel
+
+# env / secrets — never commit
+.env
+.env*.local
+.env.local
+.env.production
+
+# typescript / build info
+*.tsbuildinfo
+next-env.d.ts
+
+# misc
+.DS_Store
+*.log

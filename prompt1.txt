@@ -1,0 +1,5 @@
+echo "Act as a Lead DevOps and Database Engineer. Read system_architecture.md." > prompt1.txt
+echo "1. Output terminal commands to initialize Next.js, Cloudflare Wrangler, and Drizzle." >> prompt1.txt
+echo "2. Write schema.ts using Drizzle for Organizations, Branches, Users, and Staff_Profiles." >> prompt1.txt
+echo "Ensure the schema efficiently routes a staff of 20+ educators to various student rosters." >> prompt1.txt
+echo "Use UUID keys and role enums. No API/UI yet." >> prompt1.txt

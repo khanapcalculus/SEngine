@@ -1,0 +1,7 @@
+echo "Outstanding work on Module 4. The DO polyfill was a smart call. All 51 tests passed." > prompt5.txt
+echo "Phase 5: Real Authentication. Act as Lead Security Engineer." >> prompt5.txt
+echo "Task 1: Replace the getAuthContext stub in src/lib/auth.ts with a robust JWT or session verification mechanism compatible with Cloudflare Workers." >> prompt5.txt
+echo "Task 2: Build a POST /api/auth/login route that accepts an email/password, verifies the hash, and issues the secure token/cookie." >> prompt5.txt
+echo "Task 3: Update the users table schema in src/db/schema.ts to safely store hashed passwords (do NOT store plain text)." >> prompt5.txt
+echo "Constraints: Use standard edge-compatible crypto for hashing (e.g., WebCrypto API). Ensure the token securely embeds the user's ID, Role, and BranchId so our existing RBAC guards work natively." >> prompt5.txt
+echo "Output the updated auth logic, the new login route, and the Vitest test suite to prove tokens are issued and rejected correctly." >> prompt5.txt

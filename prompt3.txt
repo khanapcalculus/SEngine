@@ -1,0 +1,8 @@
+echo "Excellent work catching the UUID bug and stubbing the auth context. Approved." > prompt3.txt
+echo "Phase 3: Module 3 (SIS Lifecycle). Act as Lead Backend Engineer." >> prompt3.txt
+echo "Task 1: Update src/db/schema.ts to include tables for Student_Profiles, Classes, and Enrollments." >> prompt3.txt
+echo "Task 2: Build POST /api/students/enroll to create a User and Student_Profile in a single transaction." >> prompt3.txt
+echo "Task 3: Build POST /api/classes/assign to link a student to a class." >> prompt3.txt
+echo "Constraints: Maintain strict RBAC checks. Validate all JSON body data. Do not build any frontend UI." >> prompt3.txt
+echo "Write Vitest API tests. For the test mock data, use realistic educational scenarios (e.g., enrolling a student named Raj into an Algebra 2 class taught by Meghan Meyer)." >> prompt3.txt
+echo "Output the updated schema, the API routes, and the terminal commands to test and generate the new SQL migration." >> prompt3.txt

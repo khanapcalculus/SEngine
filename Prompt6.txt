@@ -1,0 +1,4 @@
+"The crypto implementation is brilliant. We are freezing backend feature development here. Do not build rate-limiting (we will use Cloudflare WAF) or token revocation.
+
+We are preparing for production deployment. Act as Lead DevOps.
+Write a standalone src/db/seed.ts script that uses our new crypto.ts functions to securely hash a password and insert a single Super Admin user (e.g., admin@network.com) and their linked Staff_Profile into the database. Output the code and the terminal command to run it using tsx or ts-node."

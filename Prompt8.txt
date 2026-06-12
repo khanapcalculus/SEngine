@@ -1,0 +1,25 @@
+Global Educational ERP & LMS
+Multi-tenant platform · API is live.
+
+API surface
+POST
+/api/auth/login
+Issue session token
+POST
+/api/staff/onboard
+HR — create staff
+GET
+/api/staff/branch/[branchId]
+HR — active roster
+POST
+/api/students/enroll
+SIS — enroll student
+POST
+/api/classes/assign
+SIS — assign to class
+POST
+/api/ai/tutor-copilot
+LMS — Gemma 4 tutor
+GET
+/api/health
+Liveness probe
