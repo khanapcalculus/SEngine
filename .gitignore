@@ -22,3 +22,8 @@ next-env.d.ts
 # misc
 .DS_Store
 *.log
+.env*
+
+# secrets / recovery codes — never commit
+recovery-codes.txt
+*recovery*.txt

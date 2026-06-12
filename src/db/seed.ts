@@ -28,14 +28,42 @@
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-serverless";
 import { eq } from "drizzle-orm";
+import { readFileSync, existsSync } from "node:fs";
 import ws from "ws";
+
+/**
+ * Load KEY=VALUE pairs from an env file (e.g. one created by
+ * `vercel env pull`) into process.env, WITHOUT overriding anything already set
+ * in the shell. Lets the seed use Vercel's exact DATABASE_URL with no retyping.
+ */
+function loadEnvFile(path: string): void {
+  if (!existsSync(path)) return;
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const eq = t.indexOf("=");
+    if (eq === -1) continue;
+    const key = t.slice(0, eq).trim();
+    let val = t.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = val;
+  }
+}
+
+// Pick up Vercel-pulled env (.env.local) if the shell didn't already set these.
+loadEnvFile(".env.local");
 import {
   organizations,
   branches,
   users,
   staffProfiles,
 } from "./schema";
-import { hashPassword } from "../lib/crypto";
+import { hashPassword, verifyPassword } from "../lib/crypto";
 
 // In Node there is no global WebSocket; Neon's driver needs one for its pool.
 // (At the edge this is provided by the runtime and this line is unnecessary.)
@@ -63,6 +91,15 @@ async function main(): Promise<void> {
     schema: { organizations, branches, users, staffProfiles },
   });
 
+  // Print which database host we're about to write to (password masked) so we
+  // can confirm it matches the host Vercel uses. Host is not a secret.
+  try {
+    const host = new URL(url).host;
+    console.log(`→ Connected to database host: ${host}`);
+  } catch {
+    console.log("→ (could not parse DATABASE_URL host)");
+  }
+
   try {
     // Idempotency guard: bail out if this admin already exists.
     const existing = await db
@@ -72,8 +109,52 @@ async function main(): Promise<void> {
       .limit(1);
 
     if (existing.length > 0) {
+      // Reset mode: overwrite the existing admin's password with the current
+      // SEED_ADMIN_PASSWORD. Use this when you no longer know the stored
+      // password. Run: set SEED_RESET_PASSWORD=true  (then re-run the seed)
+      if (process.env.SEED_RESET_PASSWORD === "true") {
+        const newHash = await hashPassword(ADMIN_PASSWORD);
+        await db
+          .update(users)
+          .set({ passwordHash: newHash, globalStatus: "active" })
+          .where(eq(users.id, existing[0].id));
+
+        // Self-verify: read the row back and confirm the password we just set
+        // verifies against the stored hash IN THIS DATABASE. If this prints
+        // true but the live site still rejects login, the live site is reading
+        // a DIFFERENT database than this one.
+        const [check] = await db
+          .select({
+            passwordHash: users.passwordHash,
+            role: users.role,
+            status: users.globalStatus,
+          })
+          .from(users)
+          .where(eq(users.id, existing[0].id))
+          .limit(1);
+        const verifies = check?.passwordHash
+          ? await verifyPassword(ADMIN_PASSWORD, check.passwordHash)
+          : false;
+
+        console.log(
+          `✓ Reset password for "${ADMIN_EMAIL}" (id=${existing[0].id}).`,
+        );
+        console.log(`  role=${check?.role} status=${check?.status}`);
+        console.log(`  password verifies against stored hash: ${verifies}`);
+        console.log(
+          "  → If this says true but the website still rejects login, the",
+        );
+        console.log(
+          "    website's DATABASE_URL points to a different database than this seed.",
+        );
+        return;
+      }
+
       console.log(
         `• Super Admin "${ADMIN_EMAIL}" already exists (id=${existing[0].id}). Nothing to do.`,
+      );
+      console.log(
+        "  To reset its password: set SEED_RESET_PASSWORD=true  and run this again.",
       );
       return;
     }
@@ -142,5 +223,14 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   console.error("✗ Seed failed:", err instanceof Error ? err.message : err);
+  // Drizzle wraps the underlying Postgres/connection error as `.cause`; surface
+  // it so we can tell "table missing" from "auth failed" from "wrong host".
+  const cause = (err as { cause?: unknown })?.cause;
+  if (cause) {
+    console.error(
+      "  Underlying cause:",
+      cause instanceof Error ? cause.message : cause,
+    );
+  }
   process.exit(1);
 });
