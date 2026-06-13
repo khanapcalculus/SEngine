@@ -29,6 +29,7 @@ import {
   jsonb,
   index,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -91,6 +92,20 @@ export const promotionOutcomeEnum = pgEnum("student_promotion_outcome", [
   "promoted", // advanced to the next level
   "retained", // held at the same level
   "graduated", // completed the program
+]);
+
+/** Module 4 — publication lifecycle of a class assignment. */
+export const assignmentStatusEnum = pgEnum("assignment_status", [
+  "draft", // visible to staff only
+  "published", // visible to enrolled students
+  "closed", // no longer accepting submissions
+]);
+
+/** Module 4 — lifecycle of a student's submission to an assignment. */
+export const submissionStatusEnum = pgEnum("submission_status", [
+  "draft",
+  "submitted",
+  "graded",
 ]);
 
 /* ─────────────────────────── Organizations ─────────────────────── */
@@ -394,6 +409,171 @@ export const studentPromotions = pgTable(
   }),
 );
 
+/* ─────────────────────────── Assignments (M4) ──────────────────── */
+/** A piece of gradeable work set for a class (Module 4 — Advanced LMS). */
+export const assignments = pgTable(
+  "assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    title: varchar("title", { length: 255 }).notNull(),
+    description: text("description"),
+    dueDate: timestamp("due_date", { withTimezone: true }),
+    maxPoints: integer("max_points").notNull().default(100),
+    status: assignmentStatusEnum("status").notNull().default("draft"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    classStatusIdx: index("assignments_class_status_idx").on(
+      t.classId,
+      t.status,
+    ),
+    classDueIdx: index("assignments_class_due_idx").on(t.classId, t.dueDate),
+  }),
+);
+
+/* ─────────────────────────── Submissions (M4) ──────────────────── */
+/** A student's submission to an assignment. One per (assignment, student). */
+export const submissions = pgTable(
+  "submissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    assignmentId: uuid("assignment_id")
+      .notNull()
+      .references(() => assignments.id, { onDelete: "cascade" }),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => studentProfiles.id, { onDelete: "cascade" }),
+    status: submissionStatusEnum("status").notNull().default("submitted"),
+    pointsAwarded: integer("points_awarded"), // null until graded
+    feedback: text("feedback"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    gradedBy: uuid("graded_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    gradedAt: timestamp("graded_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // A student submits to a given assignment at most once.
+    assignmentStudentUq: uniqueIndex("submissions_assignment_student_idx").on(
+      t.assignmentId,
+      t.studentId,
+    ),
+    assignmentIdx: index("submissions_assignment_id_idx").on(t.assignmentId),
+  }),
+);
+
+/* ──────────────────────── Submission Files (M4) ────────────────── */
+/**
+ * Metadata for a file attached to a submission. The bytes live in object
+ * storage (Vercel Blob); we store the access url + provider key, never blobs.
+ */
+export const submissionFiles = pgTable(
+  "submission_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    submissionId: uuid("submission_id")
+      .notNull()
+      .references(() => submissions.id, { onDelete: "cascade" }),
+    fileName: varchar("file_name", { length: 512 }).notNull(),
+    contentType: varchar("content_type", { length: 128 }),
+    sizeBytes: integer("size_bytes"),
+    storageProvider: varchar("storage_provider", { length: 32 })
+      .notNull()
+      .default("vercel_blob"),
+    storageKey: varchar("storage_key", { length: 1024 }).notNull(),
+    url: text("url").notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    submissionIdx: index("submission_files_submission_id_idx").on(
+      t.submissionId,
+    ),
+  }),
+);
+
+/* ────────────────────── Discussion Threads (M4) ────────────────── */
+/** A discussion thread scoped to a class, optionally tied to an assignment. */
+export const discussionThreads = pgTable(
+  "discussion_threads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    assignmentId: uuid("assignment_id").references(() => assignments.id, {
+      onDelete: "set null",
+    }), // nullable: general class discussion vs assignment Q&A
+    authorId: uuid("author_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    title: varchar("title", { length: 255 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    classCreatedIdx: index("discussion_threads_class_created_idx").on(
+      t.classId,
+      t.createdAt,
+    ),
+  }),
+);
+
+/* ─────────────────────── Discussion Posts (M4) ─────────────────── */
+/** A post within a thread. parentPostId enables threaded replies (adjacency list). */
+export const discussionPosts = pgTable(
+  "discussion_posts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => discussionThreads.id, { onDelete: "cascade" }),
+    parentPostId: uuid("parent_post_id").references(
+      (): AnyPgColumn => discussionPosts.id,
+      { onDelete: "set null" },
+    ), // self-ref; null = top-level post
+    authorId: uuid("author_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    threadCreatedIdx: index("discussion_posts_thread_created_idx").on(
+      t.threadId,
+      t.createdAt,
+    ),
+    parentIdx: index("discussion_posts_parent_idx").on(t.parentPostId),
+  }),
+);
+
 /* ──────────────────────────── Audit Logs ───────────────────────── */
 /**
  * Module 1 — immutable audit trail. Append-only record of state changes
@@ -483,7 +663,66 @@ export const classesRelations = relations(classes, ({ one, many }) => ({
   }),
   enrollments: many(enrollments),
   staffAssignments: many(staffAssignments),
+  assignments: many(assignments),
+  discussionThreads: many(discussionThreads),
 }));
+
+export const assignmentsRelations = relations(
+  assignments,
+  ({ one, many }) => ({
+    class: one(classes, {
+      fields: [assignments.classId],
+      references: [classes.id],
+    }),
+    submissions: many(submissions),
+  }),
+);
+
+export const submissionsRelations = relations(
+  submissions,
+  ({ one, many }) => ({
+    assignment: one(assignments, {
+      fields: [submissions.assignmentId],
+      references: [assignments.id],
+    }),
+    student: one(studentProfiles, {
+      fields: [submissions.studentId],
+      references: [studentProfiles.id],
+    }),
+    files: many(submissionFiles),
+  }),
+);
+
+export const submissionFilesRelations = relations(
+  submissionFiles,
+  ({ one }) => ({
+    submission: one(submissions, {
+      fields: [submissionFiles.submissionId],
+      references: [submissions.id],
+    }),
+  }),
+);
+
+export const discussionThreadsRelations = relations(
+  discussionThreads,
+  ({ one, many }) => ({
+    class: one(classes, {
+      fields: [discussionThreads.classId],
+      references: [classes.id],
+    }),
+    posts: many(discussionPosts),
+  }),
+);
+
+export const discussionPostsRelations = relations(
+  discussionPosts,
+  ({ one }) => ({
+    thread: one(discussionThreads, {
+      fields: [discussionPosts.threadId],
+      references: [discussionThreads.id],
+    }),
+  }),
+);
 
 export const enrollmentsRelations = relations(enrollments, ({ one }) => ({
   student: one(studentProfiles, {

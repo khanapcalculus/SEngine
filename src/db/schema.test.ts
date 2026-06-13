@@ -22,12 +22,19 @@ import {
   classes,
   studentProfiles,
   studentPromotions,
+  assignments,
+  submissions,
+  submissionFiles,
+  discussionThreads,
+  discussionPosts,
   userRoleEnum,
   globalStatusEnum,
   branchStatusEnum,
   staffStatusEnum,
   staffAssignmentRoleEnum,
   promotionOutcomeEnum,
+  assignmentStatusEnum,
+  submissionStatusEnum,
 } from "./schema";
 
 /** Helper: map a drizzle table's columns by name for easy assertions. */
@@ -77,6 +84,86 @@ describe("enums", () => {
       "retained",
       "graduated",
     ]);
+    expect(assignmentStatusEnum.enumValues).toEqual([
+      "draft",
+      "published",
+      "closed",
+    ]);
+    expect(submissionStatusEnum.enumValues).toEqual([
+      "draft",
+      "submitted",
+      "graded",
+    ]);
+  });
+});
+
+describe("Module 4 — LMS schema", () => {
+  it("assignments belong to a class and carry status + max points", () => {
+    const cols = columnsOf(assignments);
+    expect(cols.class_id.notNull).toBe(true);
+    expect(cols.max_points.notNull).toBe(true);
+    expect(cols.status.columnType).toBe("PgEnumColumn");
+    expect(fkTargets(assignments)).toContainEqual({
+      column: "class_id",
+      foreignTable: "classes",
+    });
+    expect(indexNames(assignments)).toContain("assignments_class_status_idx");
+  });
+
+  it("submissions are unique per (assignment, student)", () => {
+    const cols = columnsOf(submissions);
+    expect(cols.assignment_id.notNull).toBe(true);
+    expect(cols.student_id.notNull).toBe(true);
+    expect(cols.points_awarded.notNull).toBe(false);
+    const fks = fkTargets(submissions);
+    expect(fks).toContainEqual({
+      column: "assignment_id",
+      foreignTable: "assignments",
+    });
+    expect(fks).toContainEqual({
+      column: "student_id",
+      foreignTable: "student_profiles",
+    });
+    expect(indexNames(submissions)).toContain(
+      "submissions_assignment_student_idx",
+    );
+  });
+
+  it("submission_files store metadata + a storage key (no blobs)", () => {
+    const cols = columnsOf(submissionFiles);
+    expect(cols.storage_key.notNull).toBe(true);
+    expect(cols.url.notNull).toBe(true);
+    expect(fkTargets(submissionFiles)).toContainEqual({
+      column: "submission_id",
+      foreignTable: "submissions",
+    });
+  });
+
+  it("discussion threads reference a class with a NULLABLE assignment link", () => {
+    const cols = columnsOf(discussionThreads);
+    expect(cols.class_id.notNull).toBe(true);
+    expect(cols.assignment_id.notNull).toBe(false);
+    const fks = fkTargets(discussionThreads);
+    expect(fks).toContainEqual({ column: "class_id", foreignTable: "classes" });
+    expect(fks).toContainEqual({
+      column: "assignment_id",
+      foreignTable: "assignments",
+    });
+  });
+
+  it("discussion posts self-reference for threading", () => {
+    const cols = columnsOf(discussionPosts);
+    expect(cols.thread_id.notNull).toBe(true);
+    expect(cols.parent_post_id.notNull).toBe(false);
+    const fks = fkTargets(discussionPosts);
+    expect(fks).toContainEqual({
+      column: "thread_id",
+      foreignTable: "discussion_threads",
+    });
+    expect(fks).toContainEqual({
+      column: "parent_post_id",
+      foreignTable: "discussion_posts",
+    });
   });
 });
 
