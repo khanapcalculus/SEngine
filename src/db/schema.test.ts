@@ -18,10 +18,12 @@ import {
   branches,
   users,
   staffProfiles,
+  staffAssignments,
   userRoleEnum,
   globalStatusEnum,
   branchStatusEnum,
   staffStatusEnum,
+  staffAssignmentRoleEnum,
 } from "./schema";
 
 /** Helper: map a drizzle table's columns by name for easy assertions. */
@@ -65,6 +67,7 @@ describe("enums", () => {
       "retired",
       "terminated",
     ]);
+    expect(staffAssignmentRoleEnum.enumValues).toEqual(["lead", "assistant"]);
   });
 });
 
@@ -133,5 +136,35 @@ describe("staff_profiles (educator routing pivot)", () => {
     const idx = indexNames(staffProfiles);
     expect(idx).toContain("staff_profiles_branch_dept_idx");
     expect(idx).toContain("staff_profiles_user_id_idx");
+  });
+});
+
+describe("staff_assignments (assignment routing)", () => {
+  const cols = columnsOf(staffAssignments);
+
+  it("links a staff profile to a class with a NOT NULL role", () => {
+    expect(cols.staff_id.notNull).toBe(true);
+    expect(cols.class_id.notNull).toBe(true);
+    expect(cols.role.notNull).toBe(true);
+    expect(cols.role.columnType).toBe("PgEnumColumn");
+  });
+
+  it("references staff_profiles and classes", () => {
+    const fks = fkTargets(staffAssignments);
+    expect(fks).toContainEqual({
+      column: "staff_id",
+      foreignTable: "staff_profiles",
+    });
+    expect(fks).toContainEqual({
+      column: "class_id",
+      foreignTable: "classes",
+    });
+  });
+
+  it("has the unique (staff, class) pairing + roster lookup indexes", () => {
+    const idx = indexNames(staffAssignments);
+    expect(idx).toContain("staff_assignments_staff_class_idx");
+    expect(idx).toContain("staff_assignments_class_id_idx");
+    expect(idx).toContain("staff_assignments_staff_id_idx");
   });
 });

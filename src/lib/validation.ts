@@ -361,3 +361,60 @@ export function parseChangeStaffStatus(body: unknown): ChangeStaffStatusInput {
     effectiveDate,
   };
 }
+
+/** Roles a staff member can hold on a class roster (mirrors the DB enum). */
+export const STAFF_ASSIGNMENT_ROLES = ["lead", "assistant"] as const;
+export type StaffAssignmentRole = (typeof STAFF_ASSIGNMENT_ROLES)[number];
+
+export interface AssignStaffInput {
+  staffProfileId: string;
+  classId: string;
+  role: StaffAssignmentRole;
+}
+
+/** Validate the POST /api/staff/assign body. role is optional (default lead). */
+export function parseAssignStaff(body: unknown): AssignStaffInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.staffProfileId))
+    fields.staffProfileId = "staffProfileId must be a UUID";
+  if (!isUuid(b.classId)) fields.classId = "classId must be a UUID";
+
+  let role: StaffAssignmentRole = "lead";
+  if (b.role !== undefined) {
+    if (
+      typeof b.role !== "string" ||
+      !STAFF_ASSIGNMENT_ROLES.includes(b.role as StaffAssignmentRole)
+    )
+      fields.role = `role must be one of ${STAFF_ASSIGNMENT_ROLES.join(", ")}`;
+    else role = b.role as StaffAssignmentRole;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return {
+    staffProfileId: b.staffProfileId as string,
+    classId: b.classId as string,
+    role,
+  };
+}
+
+export interface UnassignStaffInput {
+  assignmentId: string;
+}
+
+/** Validate the POST /api/staff/unassign body. */
+export function parseUnassignStaff(body: unknown): UnassignStaffInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.assignmentId))
+    fields.assignmentId = "assignmentId must be a UUID";
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { assignmentId: b.assignmentId as string };
+}

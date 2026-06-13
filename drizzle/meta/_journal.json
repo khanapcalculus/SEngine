@@ -29,6 +29,13 @@
       "when": 1781292491494,
       "tag": "0003_true_nicolaos",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781337425960,
+      "tag": "0004_staff_assignments",
+      "breakpoints": true
     }
   ]
 }

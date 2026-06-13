@@ -79,6 +79,12 @@ export const enrollmentStatusEnum = pgEnum("enrollment_status", [
   "withdrawn",
 ]);
 
+/** A staff member's role on a class roster (ERD: Staff_Assignments.Role). */
+export const staffAssignmentRoleEnum = pgEnum("staff_assignment_role", [
+  "lead", // primary educator of record for the section
+  "assistant", // supporting educator / TA
+]);
+
 /* ─────────────────────────── Organizations ─────────────────────── */
 /** Top of the tenant hierarchy: a network of schools (Super Admin scope). */
 export const organizations = pgTable("organizations", {
@@ -302,6 +308,44 @@ export const enrollments = pgTable(
   }),
 );
 
+/* ───────────────────────── Staff Assignments ───────────────────── */
+/**
+ * Module 2 — Assignment Routing. Join of a staff member to a class they work,
+ * with a role (lead / assistant). Mirrors enrollments: a staff member may work
+ * many classes; a class has many staff — but each pairing exists at most ONCE,
+ * enforced by a unique (staff, class).
+ */
+export const staffAssignments = pgTable(
+  "staff_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffId: uuid("staff_id")
+      .notNull()
+      .references(() => staffProfiles.id, { onDelete: "cascade" }),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    role: staffAssignmentRoleEnum("role").notNull().default("lead"),
+    assignedAt: timestamp("assigned_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // A staff member is assigned to a given class at most once.
+    staffClassUq: uniqueIndex("staff_assignments_staff_class_idx").on(
+      t.staffId,
+      t.classId,
+    ),
+    // "Who staffs this class?" roster lookup.
+    classIdx: index("staff_assignments_class_id_idx").on(t.classId),
+    // "What does this educator work?" — the reverse routing lookup.
+    staffIdx: index("staff_assignments_staff_id_idx").on(t.staffId),
+  }),
+);
+
 /* ──────────────────────────── Audit Logs ───────────────────────── */
 /**
  * Module 1 — immutable audit trail. Append-only record of state changes
@@ -379,6 +423,7 @@ export const classesRelations = relations(classes, ({ one, many }) => ({
     references: [branches.id],
   }),
   enrollments: many(enrollments),
+  staffAssignments: many(staffAssignments),
 }));
 
 export const enrollmentsRelations = relations(enrollments, ({ one }) => ({
@@ -403,13 +448,31 @@ export const usersRelations = relations(users, ({ one }) => ({
   }),
 }));
 
-export const staffProfilesRelations = relations(staffProfiles, ({ one }) => ({
-  user: one(users, {
-    fields: [staffProfiles.userId],
-    references: [users.id],
+export const staffProfilesRelations = relations(
+  staffProfiles,
+  ({ one, many }) => ({
+    user: one(users, {
+      fields: [staffProfiles.userId],
+      references: [users.id],
+    }),
+    branch: one(branches, {
+      fields: [staffProfiles.branchId],
+      references: [branches.id],
+    }),
+    assignments: many(staffAssignments),
   }),
-  branch: one(branches, {
-    fields: [staffProfiles.branchId],
-    references: [branches.id],
+);
+
+export const staffAssignmentsRelations = relations(
+  staffAssignments,
+  ({ one }) => ({
+    staff: one(staffProfiles, {
+      fields: [staffAssignments.staffId],
+      references: [staffProfiles.id],
+    }),
+    class: one(classes, {
+      fields: [staffAssignments.classId],
+      references: [classes.id],
+    }),
   }),
-}));
+);

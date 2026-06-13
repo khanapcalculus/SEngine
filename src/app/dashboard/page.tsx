@@ -74,6 +74,16 @@ interface AuditRow {
   createdAt: string;
 }
 
+interface AssignmentRow {
+  assignmentId: string;
+  classId: string;
+  staffProfileId: string;
+  fullName: string;
+  email: string;
+  department: string;
+  role: string;
+}
+
 const isManager = (role?: string) =>
   role === "super_admin" || role === "branch_manager";
 const isSuperAdmin = (role?: string) => role === "super_admin";
@@ -94,12 +104,14 @@ export default function DashboardPage() {
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [audit, setAudit] = useState<AuditRow[]>([]);
+  const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
 
   const clearBranchData = useCallback(() => {
     setStaff([]);
     setStudents([]);
     setClasses([]);
     setAudit([]);
+    setAssignments([]);
   }, []);
 
   const refresh = useCallback(
@@ -109,15 +121,17 @@ export default function DashboardPage() {
         return r.ok ? r.json() : null;
       };
 
-      const [s, st, c] = await Promise.all([
+      const [s, st, c, asg] = await Promise.all([
         get(`/api/staff/branch/${bid}`),
         get(`/api/students/branch/${bid}`),
         get(`/api/classes/branch/${bid}`),
+        get(`/api/staff/assignments/branch/${bid}`),
       ]);
 
       setStaff(Array.isArray(s?.staff) ? s.staff : []);
       setStudents(Array.isArray(st?.students) ? st.students : []);
       setClasses(Array.isArray(c?.classes) ? c.classes : []);
+      setAssignments(Array.isArray(asg?.assignments) ? asg.assignments : []);
 
       if (isManager(role)) {
         const a = await get(`/api/audit/branch/${bid}`);
@@ -247,6 +261,22 @@ export default function DashboardPage() {
     reload();
   }
 
+  async function onUnassign(assignmentId: string) {
+    if (!window.confirm("Remove this staff assignment?")) return;
+    const res = await fetch("/api/staff/unassign", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assignmentId }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setNotice(null);
+      setActionError(fmtErr(d));
+      return;
+    }
+    flash("Removed staff assignment.");
+  }
+
   async function onStaffStatusChange(
     staffProfileId: string,
     status: string,
@@ -336,6 +366,12 @@ export default function DashboardPage() {
   const scopeHelp = isSuperAdmin(me?.role)
     ? "Select an organization and branch to manage rosters, classes, and audit logs."
     : "This account uses its verified branch assignment for branch-scoped actions.";
+
+  const assignmentsByClass = useMemo(() => {
+    const map: Record<string, AssignmentRow[]> = {};
+    for (const a of assignments) (map[a.classId] ??= []).push(a);
+    return map;
+  }, [assignments]);
 
   if (loading) {
     return (
@@ -522,12 +558,55 @@ export default function DashboardPage() {
         {classes.length === 0 ? (
           <p style={dim}>No classes yet.</p>
         ) : (
-          <ul style={{ margin: "0 0 12px", paddingLeft: 18, fontSize: 13 }}>
-            {classes.map((c) => (
-              <li key={c.id}>
-                {c.subject} - <span style={{ opacity: 0.6 }}>{c.term}</span>
-              </li>
-            ))}
+          <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none", fontSize: 13 }}>
+            {classes.map((c) => {
+              const staffOfClass = assignmentsByClass[c.id] ?? [];
+              return (
+                <li
+                  key={c.id}
+                  style={{
+                    padding: "8px 0",
+                    borderTop: "1px solid rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <div>
+                    {c.subject} -{" "}
+                    <span style={{ opacity: 0.6 }}>{c.term}</span>
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 4,
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 6,
+                      alignItems: "center",
+                    }}
+                  >
+                    {staffOfClass.length === 0 ? (
+                      <span style={dim}>No staff assigned.</span>
+                    ) : (
+                      staffOfClass.map((a) => (
+                        <span key={a.assignmentId} style={chip}>
+                          {a.fullName}{" "}
+                          <span style={{ opacity: 0.6 }}>({a.role})</span>
+                          {isManager(me?.role) && (
+                            <button
+                              type="button"
+                              onClick={() => onUnassign(a.assignmentId)}
+                              style={chipX}
+                              title="Unassign"
+                              aria-label={`Unassign ${a.fullName}`}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </Section>
@@ -536,6 +615,9 @@ export default function DashboardPage() {
       <EnrollStudentForm scope={scope} onDone={flash} />
       {isManager(me?.role) && <CreateClassForm scope={scope} onDone={flash} />}
       <AssignClassForm students={students} classes={classes} onDone={flash} />
+      {isManager(me?.role) && (
+        <AssignStaffForm staff={staff} classes={classes} onDone={flash} />
+      )}
 
       <TutorPanel classes={classes} />
 
@@ -918,6 +1000,111 @@ function AssignClassForm({
           )}
           <button type="submit" disabled={busy} style={btn(busy)}>
             {busy ? "Saving…" : "Assign"}
+          </button>
+        </form>
+      )}
+    </Section>
+  );
+}
+
+function AssignStaffForm({
+  staff,
+  classes,
+  onDone,
+}: {
+  staff: StaffRow[];
+  classes: ClassRow[];
+  onDone: (m: string) => void;
+}) {
+  // Only active staff can be routed to a roster (the service rejects others).
+  const activeStaff = useMemo(
+    () => staff.filter((s) => s.status === "active"),
+    [staff],
+  );
+  const [staffId, setStaffId] = useState("");
+  const [classId, setClassId] = useState("");
+  const [role, setRole] = useState("lead");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!activeStaff.some((s) => s.staffProfileId === staffId)) setStaffId("");
+  }, [staffId, activeStaff]);
+
+  useEffect(() => {
+    if (!classes.some((c) => c.id === classId)) setClassId("");
+  }, [classId, classes]);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/staff/assign", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ staffProfileId: staffId, classId, role }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) return setErr(fmtErr(d));
+      onDone("Staff assigned to class.");
+      setStaffId("");
+      setClassId("");
+      setRole("lead");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Section title="Assign staff to class">
+      {activeStaff.length === 0 || classes.length === 0 ? (
+        <p style={dim}>
+          Add at least one active staff member and one class first.
+        </p>
+      ) : (
+        <form onSubmit={submit} style={formGrid}>
+          <select
+            style={inp}
+            required
+            value={staffId}
+            onChange={(e) => setStaffId(e.target.value)}
+          >
+            <option value="">Select staff…</option>
+            {activeStaff.map((s) => (
+              <option key={s.staffProfileId} value={s.staffProfileId}>
+                {s.fullName} ({s.department})
+              </option>
+            ))}
+          </select>
+          <select
+            style={inp}
+            required
+            value={classId}
+            onChange={(e) => setClassId(e.target.value)}
+          >
+            <option value="">Select class…</option>
+            {classes.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.subject} ({c.term})
+              </option>
+            ))}
+          </select>
+          <select
+            style={inp}
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+          >
+            <option value="lead">lead</option>
+            <option value="assistant">assistant</option>
+          </select>
+          {err && (
+            <p role="alert" style={errStyle}>
+              {err}
+            </p>
+          )}
+          <button type="submit" disabled={busy} style={btn(busy)}>
+            {busy ? "Saving…" : "Assign staff"}
           </button>
         </form>
       )}
@@ -1484,6 +1671,25 @@ const miniBtn: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 600,
   cursor: "pointer",
+};
+const chip: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  background: "rgba(255,255,255,0.06)",
+  borderRadius: 6,
+  padding: "2px 8px",
+  fontSize: 12,
+};
+const chipX: React.CSSProperties = {
+  border: "none",
+  background: "transparent",
+  color: "#ff8080",
+  cursor: "pointer",
+  fontSize: 14,
+  lineHeight: 1,
+  padding: 0,
+  marginLeft: 2,
 };
 const warnStyle: React.CSSProperties = {
   background: "#352713",
