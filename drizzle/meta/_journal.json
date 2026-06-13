@@ -36,6 +36,13 @@
       "when": 1781337425960,
       "tag": "0004_staff_assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781342364053,
+      "tag": "0005_sis_progression",
+      "breakpoints": true
     }
   ]
 }

@@ -24,6 +24,7 @@ import {
   text,
   date,
   integer,
+  numeric,
   timestamp,
   jsonb,
   index,
@@ -83,6 +84,13 @@ export const enrollmentStatusEnum = pgEnum("enrollment_status", [
 export const staffAssignmentRoleEnum = pgEnum("staff_assignment_role", [
   "lead", // primary educator of record for the section
   "assistant", // supporting educator / TA
+]);
+
+/** Outcome of a term-over-term progression decision (Module 3). */
+export const promotionOutcomeEnum = pgEnum("student_promotion_outcome", [
+  "promoted", // advanced to the next level
+  "retained", // held at the same level
+  "graduated", // completed the program
 ]);
 
 /* ─────────────────────────── Organizations ─────────────────────── */
@@ -228,6 +236,8 @@ export const studentProfiles = pgTable(
     enrollmentDate: date("enrollment_date").notNull(),
     cohortYear: integer("cohort_year").notNull(),
     status: studentStatusEnum("status").notNull().default("active"),
+    /** Current year/grade level; incremented by a "promoted" progression. */
+    currentLevel: integer("current_level").notNull().default(1),
     graduationDate: date("graduation_date"), // null until graduated
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -261,6 +271,8 @@ export const classes = pgTable(
       .references(() => branches.id, { onDelete: "cascade" }),
     subject: varchar("subject", { length: 255 }).notNull(),
     term: varchar("term", { length: 64 }).notNull(),
+    /** Credit-hours this section is worth; weights the transcript GPA. */
+    credits: integer("credits").notNull().default(3),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -346,6 +358,42 @@ export const staffAssignments = pgTable(
   }),
 );
 
+/* ─────────────────────────── Student Promotions ────────────────── */
+/**
+ * Module 3 — Academic Progression. Append-only history of term-over-term
+ * progression decisions for a student. One row per evaluated term, capturing
+ * the level transition, the term GPA snapshot, and the outcome. Like audit
+ * logs, rows are written once and only ever read — the transcript reads these.
+ */
+export const studentPromotions = pgTable(
+  "student_promotions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => studentProfiles.id, { onDelete: "cascade" }),
+    term: varchar("term", { length: 64 }).notNull(),
+    fromLevel: integer("from_level").notNull(),
+    toLevel: integer("to_level").notNull(),
+    /** Credit-weighted GPA for the term, snapshotted at decision time. */
+    termGpa: numeric("term_gpa", { precision: 4, scale: 2 }),
+    outcome: promotionOutcomeEnum("outcome").notNull(),
+    actorId: uuid("actor_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // Newest-first progression history per student (the transcript view).
+    studentCreatedIdx: index("student_promotions_student_created_idx").on(
+      t.studentId,
+      t.createdAt,
+    ),
+  }),
+);
+
 /* ──────────────────────────── Audit Logs ───────────────────────── */
 /**
  * Module 1 — immutable audit trail. Append-only record of state changes
@@ -414,6 +462,17 @@ export const studentProfilesRelations = relations(
       references: [branches.id],
     }),
     enrollments: many(enrollments),
+    promotions: many(studentPromotions),
+  }),
+);
+
+export const studentPromotionsRelations = relations(
+  studentPromotions,
+  ({ one }) => ({
+    student: one(studentProfiles, {
+      fields: [studentPromotions.studentId],
+      references: [studentProfiles.id],
+    }),
   }),
 );
 

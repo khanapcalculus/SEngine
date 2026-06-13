@@ -14,6 +14,7 @@ export interface CreatedClass {
   subject: string;
   term: string;
   branchId: string;
+  credits: number;
 }
 
 export interface ClassActor {
@@ -34,12 +35,14 @@ export async function createClass(
         branchId: input.branchId,
         subject: input.subject,
         term: input.term,
+        credits: input.credits,
       })
       .returning({
         id: classes.id,
         subject: classes.subject,
         term: classes.term,
         branchId: classes.branchId,
+        credits: classes.credits,
       });
 
     await writeAudit(tx, {
@@ -49,7 +52,7 @@ export async function createClass(
       action: "class.create",
       entityType: "class",
       entityId: row.id,
-      summary: `Created class "${input.subject}" (${input.term})`,
+      summary: `Created class "${input.subject}" (${input.term}, ${input.credits} cr)`,
     });
 
     return row;
@@ -60,6 +63,7 @@ export interface ClassRow {
   id: string;
   subject: string;
   term: string;
+  credits: number;
 }
 
 /** List a branch's classes, newest first. */
@@ -68,7 +72,12 @@ export async function listClassesForBranch(
   branchId: string,
 ): Promise<ClassRow[]> {
   return db
-    .select({ id: classes.id, subject: classes.subject, term: classes.term })
+    .select({
+      id: classes.id,
+      subject: classes.subject,
+      term: classes.term,
+      credits: classes.credits,
+    })
     .from(classes)
     .where(eq(classes.branchId, branchId))
     .orderBy(desc(classes.createdAt));

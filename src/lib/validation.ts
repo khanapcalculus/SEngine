@@ -4,6 +4,8 @@
  * zod later if desired without changing the route contracts.
  */
 
+import { isValidGrade, VALID_GRADES } from "../modules/sis/grading";
+
 export class ValidationError extends Error {
   constructor(
     message: string,
@@ -229,9 +231,10 @@ export interface CreateClassInput {
   subject: string;
   term: string;
   branchId: string;
+  credits: number;
 }
 
-/** Validate the POST /api/classes body. */
+/** Validate the POST /api/classes body. credits is optional (default 3). */
 export function parseCreateClass(body: unknown): CreateClassInput {
   const fields: Record<string, string> = {};
   const b = (body ?? {}) as Record<string, unknown>;
@@ -246,10 +249,89 @@ export function parseCreateClass(body: unknown): CreateClassInput {
 
   if (!isUuid(b.branchId)) fields.branchId = "branchId must be a UUID";
 
+  let credits = 3;
+  if (b.credits !== undefined) {
+    if (
+      typeof b.credits !== "number" ||
+      !Number.isInteger(b.credits) ||
+      b.credits < 1 ||
+      b.credits > 12
+    )
+      fields.credits = "credits must be an integer 1-12";
+    else credits = b.credits;
+  }
+
   if (Object.keys(fields).length > 0)
     throw new ValidationError("Invalid request body", fields);
 
-  return { subject, term, branchId: b.branchId as string };
+  return { subject, term, branchId: b.branchId as string, credits };
+}
+
+export interface GradeEnrollmentInput {
+  enrollmentId: string;
+  finalGrade: string;
+}
+
+/** Validate the POST /api/enrollments/grade body. */
+export function parseGradeEnrollment(body: unknown): GradeEnrollmentInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.enrollmentId))
+    fields.enrollmentId = "enrollmentId must be a UUID";
+
+  if (!isValidGrade(b.finalGrade))
+    fields.finalGrade = `finalGrade must be one of ${VALID_GRADES.join(", ")}`;
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return {
+    enrollmentId: b.enrollmentId as string,
+    finalGrade: b.finalGrade as string,
+  };
+}
+
+/** Outcomes a caller may request for a term progression. */
+export const PROMOTION_OUTCOMES = [
+  "promoted",
+  "retained",
+  "graduated",
+] as const;
+export type PromotionOutcome = (typeof PROMOTION_OUTCOMES)[number];
+
+export interface PromoteStudentInput {
+  studentProfileId: string;
+  term: string;
+  outcome: PromotionOutcome;
+}
+
+/** Validate the POST /api/students/promote body. outcome optional (default promoted). */
+export function parsePromoteStudent(body: unknown): PromoteStudentInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.studentProfileId))
+    fields.studentProfileId = "studentProfileId must be a UUID";
+
+  const term = typeof b.term === "string" ? b.term.trim() : "";
+  if (term.length < 1 || term.length > 64)
+    fields.term = "term required (1-64 chars)";
+
+  let outcome: PromotionOutcome = "promoted";
+  if (b.outcome !== undefined) {
+    if (
+      typeof b.outcome !== "string" ||
+      !PROMOTION_OUTCOMES.includes(b.outcome as PromotionOutcome)
+    )
+      fields.outcome = `outcome must be one of ${PROMOTION_OUTCOMES.join(", ")}`;
+    else outcome = b.outcome as PromotionOutcome;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { studentProfileId: b.studentProfileId as string, term, outcome };
 }
 
 export interface CreateOrganizationInput {

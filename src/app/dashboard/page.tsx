@@ -16,6 +16,9 @@ import {
   type FormEvent,
 } from "react";
 import { useRouter } from "next/navigation";
+import { VALID_GRADES } from "../../modules/sis/grading";
+
+const PROMOTION_OUTCOMES = ["promoted", "retained", "graduated"] as const;
 
 interface Me {
   userId: string;
@@ -65,6 +68,19 @@ interface ClassRow {
   id: string;
   subject: string;
   term: string;
+  credits: number;
+}
+
+interface EnrollmentRow {
+  enrollmentId: string;
+  classId: string;
+  classSubject: string;
+  term: string;
+  credits: number;
+  studentProfileId: string;
+  studentName: string;
+  status: string;
+  finalGrade: string | null;
 }
 
 interface AuditRow {
@@ -105,6 +121,7 @@ export default function DashboardPage() {
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
+  const [enrollments, setEnrollments] = useState<EnrollmentRow[]>([]);
 
   const clearBranchData = useCallback(() => {
     setStaff([]);
@@ -112,6 +129,7 @@ export default function DashboardPage() {
     setClasses([]);
     setAudit([]);
     setAssignments([]);
+    setEnrollments([]);
   }, []);
 
   const refresh = useCallback(
@@ -121,17 +139,19 @@ export default function DashboardPage() {
         return r.ok ? r.json() : null;
       };
 
-      const [s, st, c, asg] = await Promise.all([
+      const [s, st, c, asg, enr] = await Promise.all([
         get(`/api/staff/branch/${bid}`),
         get(`/api/students/branch/${bid}`),
         get(`/api/classes/branch/${bid}`),
         get(`/api/staff/assignments/branch/${bid}`),
+        get(`/api/enrollments/branch/${bid}`),
       ]);
 
       setStaff(Array.isArray(s?.staff) ? s.staff : []);
       setStudents(Array.isArray(st?.students) ? st.students : []);
       setClasses(Array.isArray(c?.classes) ? c.classes : []);
       setAssignments(Array.isArray(asg?.assignments) ? asg.assignments : []);
+      setEnrollments(Array.isArray(enr?.enrollments) ? enr.enrollments : []);
 
       if (isManager(role)) {
         const a = await get(`/api/audit/branch/${bid}`);
@@ -571,7 +591,9 @@ export default function DashboardPage() {
                 >
                   <div>
                     {c.subject} -{" "}
-                    <span style={{ opacity: 0.6 }}>{c.term}</span>
+                    <span style={{ opacity: 0.6 }}>
+                      {c.term} · {c.credits} cr
+                    </span>
                   </div>
                   <div
                     style={{
@@ -618,6 +640,22 @@ export default function DashboardPage() {
       {isManager(me?.role) && (
         <AssignStaffForm staff={staff} classes={classes} onDone={flash} />
       )}
+
+      {(isManager(me?.role) || me?.role === "teacher") && (
+        <Section title="Gradebook">
+          <Gradebook enrollments={enrollments} onDone={flash} />
+        </Section>
+      )}
+
+      {isManager(me?.role) && (
+        <PromoteStudentForm
+          students={students}
+          classes={classes}
+          onDone={flash}
+        />
+      )}
+
+      {isManager(me?.role) && <TranscriptViewer students={students} />}
 
       <TutorPanel classes={classes} />
 
@@ -853,7 +891,7 @@ function CreateClassForm({
   scope: TenantScope;
   onDone: (m: string) => void;
 }) {
-  const [f, setF] = useState({ subject: "", term: "" });
+  const [f, setF] = useState({ subject: "", term: "", credits: "3" });
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const disabled = !scope.branchId;
@@ -871,12 +909,17 @@ function CreateClassForm({
       const res = await fetch("/api/classes/create", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...f, branchId: scope.branchId }),
+        body: JSON.stringify({
+          subject: f.subject,
+          term: f.term,
+          credits: Number(f.credits),
+          branchId: scope.branchId,
+        }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) return setErr(fmtErr(d));
       onDone(`Created class "${f.subject}".`);
-      setF({ subject: "", term: "" });
+      setF({ subject: "", term: "", credits: "3" });
     } finally {
       setBusy(false);
     }
@@ -901,6 +944,17 @@ function CreateClassForm({
           disabled={disabled}
           value={f.term}
           onChange={(e) => setF({ ...f, term: e.target.value })}
+        />
+        <input
+          style={inp}
+          type="number"
+          min={1}
+          max={12}
+          placeholder="Credits (1-12)"
+          required
+          disabled={disabled}
+          value={f.credits}
+          onChange={(e) => setF({ ...f, credits: e.target.value })}
         />
         {err && (
           <p role="alert" style={errStyle}>
@@ -1107,6 +1161,397 @@ function AssignStaffForm({
             {busy ? "Saving…" : "Assign staff"}
           </button>
         </form>
+      )}
+    </Section>
+  );
+}
+
+function Gradebook({
+  enrollments,
+  onDone,
+}: {
+  enrollments: EnrollmentRow[];
+  onDone: (m: string) => void;
+}) {
+  const byClass = useMemo(() => {
+    const map = new Map<string, EnrollmentRow[]>();
+    for (const e of enrollments) {
+      const list = map.get(e.classId) ?? [];
+      list.push(e);
+      map.set(e.classId, list);
+    }
+    return [...map.values()];
+  }, [enrollments]);
+
+  if (enrollments.length === 0) {
+    return (
+      <p style={dim}>
+        No enrollments yet. Assign students to classes first, then grade them
+        here.
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      {byClass.map((rows) => (
+        <div key={rows[0].classId}>
+          <strong style={{ fontSize: 13 }}>
+            {rows[0].classSubject}{" "}
+            <span style={{ opacity: 0.6 }}>
+              ({rows[0].term} · {rows[0].credits} cr)
+            </span>
+          </strong>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: 13,
+              marginTop: 4,
+            }}
+          >
+            <tbody>
+              {rows.map((e) => (
+                <GradeRow key={e.enrollmentId} e={e} onDone={onDone} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GradeRow({
+  e,
+  onDone,
+}: {
+  e: EnrollmentRow;
+  onDone: (m: string) => void;
+}) {
+  const [grade, setGrade] = useState(e.finalGrade ?? "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    if (!grade) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/enrollments/grade", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enrollmentId: e.enrollmentId, finalGrade: grade }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) return setErr(fmtErr(d));
+      onDone(`Graded ${e.studentName}: ${grade}.`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <tr style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+      <td style={{ padding: 8 }}>{e.studentName}</td>
+      <td style={{ padding: 8 }}>
+        <StatusBadge status={e.status} />
+      </td>
+      <td style={{ padding: 8 }}>
+        <select
+          style={{ ...inp, padding: "4px 8px" }}
+          value={grade}
+          onChange={(ev) => setGrade(ev.target.value)}
+        >
+          <option value="">—</option>
+          {VALID_GRADES.map((g) => (
+            <option key={g} value={g}>
+              {g}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td style={{ padding: 8 }}>
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy || !grade}
+          style={miniBtn}
+        >
+          {busy ? "…" : "Save"}
+        </button>
+        {err && (
+          <span style={{ ...errStyle, marginLeft: 6 }} role="alert">
+            {err}
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function PromoteStudentForm({
+  students,
+  classes,
+  onDone,
+}: {
+  students: StudentRow[];
+  classes: ClassRow[];
+  onDone: (m: string) => void;
+}) {
+  const terms = useMemo(
+    () => [...new Set(classes.map((c) => c.term))],
+    [classes],
+  );
+  const [studentId, setStudentId] = useState("");
+  const [term, setTerm] = useState("");
+  const [outcome, setOutcome] = useState("promoted");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!students.some((s) => s.studentProfileId === studentId)) setStudentId("");
+  }, [studentId, students]);
+  useEffect(() => {
+    if (!terms.includes(term)) setTerm("");
+  }, [term, terms]);
+
+  async function submit(ev: FormEvent) {
+    ev.preventDefault();
+    setErr(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/students/promote", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ studentProfileId: studentId, term, outcome }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) return setErr(fmtErr(d));
+      onDone(`Recorded ${outcome} for ${term}.`);
+      setStudentId("");
+      setTerm("");
+      setOutcome("promoted");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Section title="Promote student">
+      {students.length === 0 || terms.length === 0 ? (
+        <p style={dim}>Add at least one student and one class (term) first.</p>
+      ) : (
+        <form onSubmit={submit} style={formGrid}>
+          <select
+            style={inp}
+            required
+            value={studentId}
+            onChange={(e) => setStudentId(e.target.value)}
+          >
+            <option value="">Select student…</option>
+            {students.map((s) => (
+              <option key={s.studentProfileId} value={s.studentProfileId}>
+                {s.fullName}
+              </option>
+            ))}
+          </select>
+          <select
+            style={inp}
+            required
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+          >
+            <option value="">Select term…</option>
+            {terms.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <select
+            style={inp}
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value)}
+          >
+            {PROMOTION_OUTCOMES.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+          {err && (
+            <p role="alert" style={errStyle}>
+              {err}
+            </p>
+          )}
+          <button type="submit" disabled={busy} style={btn(busy)}>
+            {busy ? "Saving…" : "Apply progression"}
+          </button>
+        </form>
+      )}
+    </Section>
+  );
+}
+
+interface TranscriptData {
+  student: {
+    fullName: string;
+    email: string;
+    cohortYear: number;
+    status: string;
+    currentLevel: number;
+    enrollmentDate: string;
+    graduationDate: string | null;
+  };
+  terms: Array<{
+    term: string;
+    courses: Array<{
+      subject: string;
+      credits: number;
+      grade: string | null;
+      status: string;
+    }>;
+    termGpa: number | null;
+    gradedCredits: number;
+  }>;
+  cumulativeGpa: number | null;
+  totalGradedCredits: number;
+  promotions: Array<{
+    term: string;
+    fromLevel: number;
+    toLevel: number;
+    termGpa: string | null;
+    outcome: string;
+  }>;
+}
+
+function TranscriptViewer({ students }: { students: StudentRow[] }) {
+  const [studentId, setStudentId] = useState("");
+  const [data, setData] = useState<TranscriptData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function view() {
+    if (!studentId) return;
+    setBusy(true);
+    setErr(null);
+    setData(null);
+    try {
+      const res = await fetch(`/api/students/${studentId}/transcript`);
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) return setErr(fmtErr(d));
+      setData(d);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const gpa = (v: number | null) => (v === null ? "—" : v.toFixed(2));
+
+  return (
+    <Section title="Transcript">
+      {students.length === 0 ? (
+        <p style={dim}>No students to show a transcript for yet.</p>
+      ) : (
+        <div style={{ display: "grid", gap: 10, maxWidth: 560 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <select
+              style={{ ...inp, flex: 1 }}
+              value={studentId}
+              onChange={(e) => {
+                setStudentId(e.target.value);
+                setData(null);
+              }}
+            >
+              <option value="">Select student…</option>
+              {students.map((s) => (
+                <option key={s.studentProfileId} value={s.studentProfileId}>
+                  {s.fullName}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={view}
+              disabled={busy || !studentId}
+              style={{ ...btn(busy || !studentId), width: "auto", padding: "0 16px" }}
+            >
+              {busy ? "Loading…" : "View"}
+            </button>
+          </div>
+
+          {err && (
+            <p role="alert" style={errStyle}>
+              {err}
+            </p>
+          )}
+
+          {data && (
+            <div style={tenantCard}>
+              <div style={{ marginBottom: 8 }}>
+                <strong>{data.student.fullName}</strong>{" "}
+                <StatusBadge status={data.student.status} />
+                <div style={dim}>
+                  {data.student.email} · cohort {data.student.cohortYear} · level{" "}
+                  {data.student.currentLevel} · cumulative GPA{" "}
+                  {gpa(data.cumulativeGpa)} ({data.totalGradedCredits} cr)
+                  {data.student.graduationDate
+                    ? ` · graduated ${data.student.graduationDate}`
+                    : ""}
+                </div>
+              </div>
+
+              {data.terms.length === 0 ? (
+                <p style={dim}>No coursework recorded.</p>
+              ) : (
+                data.terms.map((t) => (
+                  <div key={t.term} style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>
+                      {t.term}{" "}
+                      <span style={{ ...dim, fontWeight: 400 }}>
+                        — term GPA {gpa(t.termGpa)} ({t.gradedCredits} cr)
+                      </span>
+                    </div>
+                    <ul
+                      style={{
+                        margin: "4px 0 0",
+                        paddingLeft: 16,
+                        fontSize: 12,
+                      }}
+                    >
+                      {t.courses.map((c, i) => (
+                        <li key={i}>
+                          {c.subject} ({c.credits} cr) —{" "}
+                          {c.grade ?? "ungraded"}{" "}
+                          <span style={{ opacity: 0.5 }}>[{c.status}]</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))
+              )}
+
+              {data.promotions.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    Progression history
+                  </div>
+                  <ul
+                    style={{ margin: "4px 0 0", paddingLeft: 16, fontSize: 12 }}
+                  >
+                    {data.promotions.map((p, i) => (
+                      <li key={i}>
+                        {p.term}: {p.outcome} (level {p.fromLevel} → {p.toLevel}
+                        {p.termGpa ? `, GPA ${p.termGpa}` : ""})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </Section>
   );
@@ -1433,6 +1878,13 @@ const STATUS_COLORS: Record<string, string> = {
   on_leave: "#ffcf8f",
   retired: "#c9b6ff",
   terminated: "#ff8080",
+  // enrollment statuses
+  enrolled: "#7fd1ff",
+  completed: "#9be8b4",
+  withdrawn: "#ff8080",
+  // student statuses
+  graduated: "#c9b6ff",
+  dropped: "#ff8080",
 };
 
 function StatusBadge({ status }: { status: string }) {

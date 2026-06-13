@@ -19,11 +19,15 @@ import {
   users,
   staffProfiles,
   staffAssignments,
+  classes,
+  studentProfiles,
+  studentPromotions,
   userRoleEnum,
   globalStatusEnum,
   branchStatusEnum,
   staffStatusEnum,
   staffAssignmentRoleEnum,
+  promotionOutcomeEnum,
 } from "./schema";
 
 /** Helper: map a drizzle table's columns by name for easy assertions. */
@@ -68,6 +72,11 @@ describe("enums", () => {
       "terminated",
     ]);
     expect(staffAssignmentRoleEnum.enumValues).toEqual(["lead", "assistant"]);
+    expect(promotionOutcomeEnum.enumValues).toEqual([
+      "promoted",
+      "retained",
+      "graduated",
+    ]);
   });
 });
 
@@ -166,5 +175,45 @@ describe("staff_assignments (assignment routing)", () => {
     expect(idx).toContain("staff_assignments_staff_class_idx");
     expect(idx).toContain("staff_assignments_class_id_idx");
     expect(idx).toContain("staff_assignments_staff_id_idx");
+  });
+});
+
+describe("Module 3 — academic progression schema", () => {
+  it("classes carry NOT NULL credit-hours for GPA weighting", () => {
+    const cols = columnsOf(classes);
+    expect(cols.credits.notNull).toBe(true);
+    expect(cols.credits.columnType).toBe("PgInteger");
+  });
+
+  it("student_profiles track a NOT NULL current_level", () => {
+    const cols = columnsOf(studentProfiles);
+    expect(cols.current_level.notNull).toBe(true);
+    expect(cols.current_level.columnType).toBe("PgInteger");
+  });
+
+  describe("student_promotions (append-only progression history)", () => {
+    const cols = columnsOf(studentPromotions);
+
+    it("records the level transition + a nullable term GPA", () => {
+      expect(cols.from_level.notNull).toBe(true);
+      expect(cols.to_level.notNull).toBe(true);
+      expect(cols.outcome.notNull).toBe(true);
+      expect(cols.term_gpa.notNull).toBe(false);
+    });
+
+    it("references student_profiles and (nullable) the acting user", () => {
+      const fks = fkTargets(studentPromotions);
+      expect(fks).toContainEqual({
+        column: "student_id",
+        foreignTable: "student_profiles",
+      });
+      expect(fks).toContainEqual({ column: "actor_id", foreignTable: "users" });
+    });
+
+    it("indexes (student, created_at) for the transcript history feed", () => {
+      expect(indexNames(studentPromotions)).toContain(
+        "student_promotions_student_created_idx",
+      );
+    });
   });
 });
