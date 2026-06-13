@@ -227,6 +227,28 @@ export function parseLogin(body: unknown): LoginInput {
   return { email, password };
 }
 
+export interface ResetPasswordInput {
+  userId: string;
+  newPassword: string;
+}
+
+/** Validate the POST /api/auth/reset-password body. */
+export function parseResetPassword(body: unknown): ResetPasswordInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.userId)) fields.userId = "userId must be a UUID";
+
+  const newPassword = typeof b.newPassword === "string" ? b.newPassword : "";
+  if (newPassword.length < 8 || newPassword.length > 1024)
+    fields.newPassword = "newPassword must be 8-1024 characters";
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { userId: b.userId as string, newPassword };
+}
+
 export interface CreateClassInput {
   subject: string;
   term: string;

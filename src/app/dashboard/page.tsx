@@ -703,19 +703,62 @@ function OnboardStaffForm({
     department: "",
     hireDate: "",
   });
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const disabled = !scope.orgId || !scope.branchId;
 
+  function validateForm(): boolean {
+    const errors: Record<string, string> = {};
+    
+    if (!f.email.trim()) {
+      errors.email = "Email is required";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
+      errors.email = "Please enter a valid email address";
+    }
+    
+    if (!f.fullName.trim()) {
+      errors.fullName = "Full name is required";
+    } else if (f.fullName.length > 255) {
+      errors.fullName = "Full name must be 255 characters or less";
+    }
+    
+    if (!f.department.trim()) {
+      errors.department = "Department is required";
+    } else if (f.department.length > 128) {
+      errors.department = "Department must be 128 characters or less";
+    }
+    
+    if (!f.hireDate) {
+      errors.hireDate = "Hire date is required";
+    } else if (isNaN(Date.parse(f.hireDate))) {
+      errors.hireDate = "Please enter a valid date";
+    }
+    
+    setFieldErrors(errors);
+    console.log("Form Validation Errors:", errors);
+    return Object.keys(errors).length === 0;
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
+    console.log("Form submission triggered");
+    
     if (!scope.orgId || !scope.branchId) {
       setErr("Select an organization and branch first.");
+      console.log("Scope validation failed: orgId or branchId missing");
+      return;
+    }
+
+    if (!validateForm()) {
+      console.log("Form validation failed, blocking submission");
       return;
     }
 
     setErr(null);
     setBusy(true);
+    console.log("Sending request to /api/staff/onboard with data:", f);
+    
     try {
       const res = await fetch("/api/staff/onboard", {
         method: "POST",
@@ -727,9 +770,21 @@ function OnboardStaffForm({
         }),
       });
       const d = await res.json().catch(() => ({}));
-      if (!res.ok) return setErr(fmtErr(d));
-      onDone(`Onboarded ${f.fullName}.`);
+      console.log("API Response:", { status: res.status, data: d });
+      
+      if (!res.ok) {
+        console.log("API request failed with error:", d);
+        return setErr(fmtErr(d));
+      }
+      
+      const temporaryPassword = d.temporaryPassword;
+      console.log("Form submission successful, temporary password generated");
+      onDone(`Onboarded ${f.fullName}. Temporary password: ${temporaryPassword}`);
       setF({ email: "", fullName: "", department: "", hireDate: "" });
+      setFieldErrors({});
+    } catch (error) {
+      console.error("Form submission error:", error);
+      setErr("An unexpected error occurred. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -739,39 +794,63 @@ function OnboardStaffForm({
     <Section title="Onboard staff">
       <ScopeHint scope={scope} />
       <form onSubmit={submit} style={formGrid}>
-        <input
-          style={inp}
-          placeholder="Email"
-          type="email"
-          required
-          disabled={disabled}
-          value={f.email}
-          onChange={(e) => setF({ ...f, email: e.target.value })}
-        />
-        <input
-          style={inp}
-          placeholder="Full name"
-          required
-          disabled={disabled}
-          value={f.fullName}
-          onChange={(e) => setF({ ...f, fullName: e.target.value })}
-        />
-        <input
-          style={inp}
-          placeholder="Department"
-          required
-          disabled={disabled}
-          value={f.department}
-          onChange={(e) => setF({ ...f, department: e.target.value })}
-        />
-        <input
-          style={inp}
-          type="date"
-          required
-          disabled={disabled}
-          value={f.hireDate}
-          onChange={(e) => setF({ ...f, hireDate: e.target.value })}
-        />
+        <div>
+          <input
+            style={inp}
+            placeholder="Email"
+            type="email"
+            disabled={disabled}
+            value={f.email}
+            onChange={(e) => setF({ ...f, email: e.target.value })}
+          />
+          {fieldErrors.email && (
+            <p role="alert" style={fieldErrorStyle}>
+              {fieldErrors.email}
+            </p>
+          )}
+        </div>
+        <div>
+          <input
+            style={inp}
+            placeholder="Full name"
+            disabled={disabled}
+            value={f.fullName}
+            onChange={(e) => setF({ ...f, fullName: e.target.value })}
+          />
+          {fieldErrors.fullName && (
+            <p role="alert" style={fieldErrorStyle}>
+              {fieldErrors.fullName}
+            </p>
+          )}
+        </div>
+        <div>
+          <input
+            style={inp}
+            placeholder="Department"
+            disabled={disabled}
+            value={f.department}
+            onChange={(e) => setF({ ...f, department: e.target.value })}
+          />
+          {fieldErrors.department && (
+            <p role="alert" style={fieldErrorStyle}>
+              {fieldErrors.department}
+            </p>
+          )}
+        </div>
+        <div>
+          <input
+            style={inp}
+            type="date"
+            disabled={disabled}
+            value={f.hireDate}
+            onChange={(e) => setF({ ...f, hireDate: e.target.value })}
+          />
+          {fieldErrors.hireDate && (
+            <p role="alert" style={fieldErrorStyle}>
+              {fieldErrors.hireDate}
+            </p>
+          )}
+        </div>
         {err && (
           <p role="alert" style={errStyle}>
             {err}
@@ -798,19 +877,65 @@ function EnrollStudentForm({
     enrollmentDate: "",
     cohortYear: "",
   });
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const disabled = !scope.orgId || !scope.branchId;
 
+  function validateForm(): boolean {
+    const errors: Record<string, string> = {};
+    
+    if (!f.email.trim()) {
+      errors.email = "Email is required";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
+      errors.email = "Please enter a valid email address";
+    }
+    
+    if (!f.fullName.trim()) {
+      errors.fullName = "Full name is required";
+    } else if (f.fullName.length > 255) {
+      errors.fullName = "Full name must be 255 characters or less";
+    }
+    
+    if (!f.enrollmentDate) {
+      errors.enrollmentDate = "Enrollment date is required";
+    } else if (isNaN(Date.parse(f.enrollmentDate))) {
+      errors.enrollmentDate = "Please enter a valid date";
+    }
+    
+    if (!f.cohortYear.trim()) {
+      errors.cohortYear = "Cohort year is required";
+    } else {
+      const year = Number(f.cohortYear);
+      if (isNaN(year) || year < 2000 || year > 2100) {
+        errors.cohortYear = "Please enter a valid year between 2000 and 2100";
+      }
+    }
+    
+    setFieldErrors(errors);
+    console.log("Enroll Student Form Validation Errors:", errors);
+    return Object.keys(errors).length === 0;
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
+    console.log("Enroll Student Form submission triggered");
+    
     if (!scope.orgId || !scope.branchId) {
       setErr("Select an organization and branch first.");
+      console.log("Scope validation failed: orgId or branchId missing");
+      return;
+    }
+
+    if (!validateForm()) {
+      console.log("Form validation failed, blocking submission");
       return;
     }
 
     setErr(null);
     setBusy(true);
+    console.log("Sending request to /api/students/enroll with data:", f);
+    
     try {
       const res = await fetch("/api/students/enroll", {
         method: "POST",
@@ -825,9 +950,21 @@ function EnrollStudentForm({
         }),
       });
       const d = await res.json().catch(() => ({}));
-      if (!res.ok) return setErr(fmtErr(d));
-      onDone(`Enrolled ${f.fullName}.`);
+      console.log("API Response:", { status: res.status, data: d });
+      
+      if (!res.ok) {
+        console.log("API request failed with error:", d);
+        return setErr(fmtErr(d));
+      }
+      
+      const temporaryPassword = d.temporaryPassword;
+      console.log("Form submission successful, temporary password generated");
+      onDone(`Enrolled ${f.fullName}. Temporary password: ${temporaryPassword}`);
       setF({ email: "", fullName: "", enrollmentDate: "", cohortYear: "" });
+      setFieldErrors({});
+    } catch (error) {
+      console.error("Form submission error:", error);
+      setErr("An unexpected error occurred. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -837,40 +974,64 @@ function EnrollStudentForm({
     <Section title="Enroll student">
       <ScopeHint scope={scope} />
       <form onSubmit={submit} style={formGrid}>
-        <input
-          style={inp}
-          placeholder="Email"
-          type="email"
-          required
-          disabled={disabled}
-          value={f.email}
-          onChange={(e) => setF({ ...f, email: e.target.value })}
-        />
-        <input
-          style={inp}
-          placeholder="Full name"
-          required
-          disabled={disabled}
-          value={f.fullName}
-          onChange={(e) => setF({ ...f, fullName: e.target.value })}
-        />
-        <input
-          style={inp}
-          type="date"
-          required
-          disabled={disabled}
-          value={f.enrollmentDate}
-          onChange={(e) => setF({ ...f, enrollmentDate: e.target.value })}
-        />
-        <input
-          style={inp}
-          placeholder="Cohort year (e.g. 2030)"
-          type="number"
-          required
-          disabled={disabled}
-          value={f.cohortYear}
-          onChange={(e) => setF({ ...f, cohortYear: e.target.value })}
-        />
+        <div>
+          <input
+            style={inp}
+            placeholder="Email"
+            type="email"
+            disabled={disabled}
+            value={f.email}
+            onChange={(e) => setF({ ...f, email: e.target.value })}
+          />
+          {fieldErrors.email && (
+            <p role="alert" style={fieldErrorStyle}>
+              {fieldErrors.email}
+            </p>
+          )}
+        </div>
+        <div>
+          <input
+            style={inp}
+            placeholder="Full name"
+            disabled={disabled}
+            value={f.fullName}
+            onChange={(e) => setF({ ...f, fullName: e.target.value })}
+          />
+          {fieldErrors.fullName && (
+            <p role="alert" style={fieldErrorStyle}>
+              {fieldErrors.fullName}
+            </p>
+          )}
+        </div>
+        <div>
+          <input
+            style={inp}
+            type="date"
+            disabled={disabled}
+            value={f.enrollmentDate}
+            onChange={(e) => setF({ ...f, enrollmentDate: e.target.value })}
+          />
+          {fieldErrors.enrollmentDate && (
+            <p role="alert" style={fieldErrorStyle}>
+              {fieldErrors.enrollmentDate}
+            </p>
+          )}
+        </div>
+        <div>
+          <input
+            style={inp}
+            placeholder="Cohort year (e.g. 2030)"
+            type="number"
+            disabled={disabled}
+            value={f.cohortYear}
+            onChange={(e) => setF({ ...f, cohortYear: e.target.value })}
+          />
+          {fieldErrors.cohortYear && (
+            <p role="alert" style={fieldErrorStyle}>
+              {fieldErrors.cohortYear}
+            </p>
+          )}
+        </div>
         {err && (
           <p role="alert" style={errStyle}>
             {err}
@@ -2113,6 +2274,12 @@ const errStyle: React.CSSProperties = {
   color: "#ff8080",
   fontSize: 13,
   margin: 0,
+};
+const fieldErrorStyle: React.CSSProperties = {
+  color: "#ff8080",
+  fontSize: 12,
+  margin: "4px 0 0 0",
+  padding: 0,
 };
 const miniBtn: React.CSSProperties = {
   padding: "4px 8px",

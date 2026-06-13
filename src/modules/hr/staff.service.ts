@@ -16,6 +16,7 @@ import type {
 import { ValidationError } from "../../lib/validation";
 import { assertBranchAccess, type AuthContext } from "../../lib/auth";
 import { writeAudit } from "../audit/audit.service";
+import { generateTemporaryPassword, hashPassword } from "../../lib/crypto";
 
 /**
  * Legal staff lifecycle transitions (Module 2). Keys are the current status;
@@ -42,6 +43,7 @@ export interface OnboardedStaff {
   staffProfileId: string;
   email: string;
   branchId: string;
+  temporaryPassword: string;
 }
 
 /**
@@ -68,6 +70,10 @@ export async function onboardStaff(
       });
     }
 
+    // Generate a secure temporary password
+    const temporaryPassword = generateTemporaryPassword();
+    const passwordHash = await hashPassword(temporaryPassword);
+
     const [user] = await tx
       .insert(users)
       .values({
@@ -76,6 +82,7 @@ export async function onboardStaff(
         fullName: input.fullName,
         role: "teacher",
         globalStatus: "active",
+        passwordHash,
       })
       .returning({ id: users.id, email: users.email });
 
@@ -106,6 +113,7 @@ export async function onboardStaff(
       staffProfileId: profile.id,
       email: user.email,
       branchId: input.branchId,
+      temporaryPassword,
     };
   });
 }

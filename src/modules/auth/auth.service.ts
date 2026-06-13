@@ -16,7 +16,7 @@
 import { eq } from "drizzle-orm";
 import type { DB } from "../../db/client";
 import { users, staffProfiles } from "../../db/schema";
-import { verifyPassword } from "../../lib/crypto";
+import { verifyPassword, hashPassword } from "../../lib/crypto";
 import { signJwt } from "../../lib/jwt";
 import type { Role } from "../../lib/auth";
 
@@ -70,8 +70,13 @@ export async function login(
   const hashToCheck = user?.passwordHash ?? DUMMY_HASH;
   const passwordOk = await verifyPassword(input.password, hashToCheck);
 
-  if (!user || !user.passwordHash || !passwordOk) {
+  if (!user || !passwordOk) {
     throw new LoginError();
+  }
+  
+  // Check if user has a password hash
+  if (!user.passwordHash) {
+    throw new LoginError("Account has no password set. Please contact administrator.");
   }
   if (user.globalStatus !== "active") {
     throw new LoginError("Account is not active");
@@ -101,4 +106,47 @@ export async function login(
     user: { id: user.id, role: user.role as Role, orgId: user.orgId, branchId },
     expiresInSeconds: deps.ttlSeconds,
   };
+}
+
+export class ResetPasswordError extends Error {
+  constructor(message = "Failed to reset password") {
+    super(message);
+    this.name = "ResetPasswordError";
+  }
+}
+
+/**
+ * Reset password for an existing user.
+ * This allows Super Admins to set passwords for users who don't have them.
+ */
+export async function resetPassword(
+  db: DB,
+  input: { userId: string; newPassword: string },
+): Promise<void> {
+  const rows = await db
+    .select({
+      id: users.id,
+      role: users.role,
+    })
+    .from(users)
+    .where(eq(users.id, input.userId))
+    .limit(1);
+
+  const user = rows[0];
+  
+  if (!user) {
+    throw new ResetPasswordError("User not found");
+  }
+
+  // Hash the new password
+  const passwordHash = await hashPassword(input.newPassword);
+  
+  // Update the user's password hash
+  await db
+    .update(users)
+    .set({ 
+      passwordHash,
+      updatedAt: new Date() 
+    })
+    .where(eq(users.id, input.userId));
 }

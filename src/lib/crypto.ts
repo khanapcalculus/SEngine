@@ -143,3 +143,22 @@ export async function hmacVerify(
   const expected = await hmacSign(data, secret);
   return timingSafeEqual(expected, signature);
 }
+
+/* ───────────────────── temporary password generation ───────────────────── */
+
+/**
+ * Generate a secure temporary password (8-character alphanumeric string).
+ * Uses cryptographically secure random values.
+ */
+export function generateTemporaryPassword(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const randomValues = new Uint8Array(8);
+  globalThis.crypto.getRandomValues(randomValues);
+  
+  let password = '';
+  for (let i = 0; i < 8; i++) {
+    password += chars[randomValues[i] % chars.length];
+  }
+  
+  return password;
+}
