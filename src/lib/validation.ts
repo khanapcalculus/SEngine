@@ -309,3 +309,55 @@ export function parseCreateBranch(body: unknown): CreateBranchInput {
 
   return { orgId: b.orgId as string, location, status };
 }
+
+/**
+ * Target staff statuses a lifecycle action may move TO. "onboarding" is the
+ * initial state only — it is never a transition target — so it is excluded.
+ */
+export const STAFF_TARGET_STATUSES = [
+  "active",
+  "on_leave",
+  "retired",
+  "terminated",
+] as const;
+export type StaffTargetStatus = (typeof STAFF_TARGET_STATUSES)[number];
+
+export interface ChangeStaffStatusInput {
+  staffProfileId: string;
+  status: StaffTargetStatus;
+  /** Offboarding date stamped onto retirementDate for retire/terminate. */
+  effectiveDate?: string;
+}
+
+/** Validate the POST /api/staff/status body. (Transition legality is the service's job.) */
+export function parseChangeStaffStatus(body: unknown): ChangeStaffStatusInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.staffProfileId))
+    fields.staffProfileId = "staffProfileId must be a UUID";
+
+  const status = typeof b.status === "string" ? b.status : "";
+  if (!STAFF_TARGET_STATUSES.includes(status as StaffTargetStatus))
+    fields.status = `status must be one of ${STAFF_TARGET_STATUSES.join(", ")}`;
+
+  let effectiveDate: string | undefined;
+  if (b.effectiveDate !== undefined) {
+    if (
+      typeof b.effectiveDate !== "string" ||
+      !ISO_DATE_RE.test(b.effectiveDate) ||
+      Number.isNaN(Date.parse(b.effectiveDate))
+    )
+      fields.effectiveDate = "effectiveDate must be ISO yyyy-mm-dd";
+    else effectiveDate = b.effectiveDate;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return {
+    staffProfileId: b.staffProfileId as string,
+    status: status as StaffTargetStatus,
+    effectiveDate,
+  };
+}

@@ -84,6 +84,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [tenantError, setTenantError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const [tenantTree, setTenantTree] = useState<TenantOrganization[]>([]);
   const [selectedOrgId, setSelectedOrgId] = useState("");
@@ -241,8 +242,36 @@ export default function DashboardPage() {
   }
 
   function flash(msg: string) {
+    setActionError(null);
     setNotice(msg);
     reload();
+  }
+
+  async function onStaffStatusChange(
+    staffProfileId: string,
+    status: string,
+    label: string,
+  ) {
+    if (
+      (status === "retired" || status === "terminated") &&
+      !window.confirm(
+        `Mark this staff member as ${status}? This is a recorded lifecycle change.`,
+      )
+    ) {
+      return;
+    }
+    const res = await fetch("/api/staff/status", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ staffProfileId, status }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setNotice(null);
+      setActionError(fmtErr(d));
+      return;
+    }
+    flash(`Staff ${label}.`);
   }
 
   function onOrgChange(nextOrgId: string) {
@@ -347,6 +376,12 @@ export default function DashboardPage() {
       {tenantError && (
         <p style={warnStyle}>
           {tenantError}
+        </p>
+      )}
+
+      {actionError && (
+        <p role="alert" style={warnStyle}>
+          {actionError}
         </p>
       )}
 
@@ -462,11 +497,10 @@ export default function DashboardPage() {
       </Section>
 
       <Section title="Staff roster">
-        <Roster
-          rows={staff.map((s) => [s.fullName, s.email, s.department, s.status])}
-          head={["Name", "Email", "Dept", "Status"]}
-          empty="No active staff in this branch yet."
-          keyOf={(_r, i) => staff[i].staffProfileId}
+        <StaffLifecycleRoster
+          staff={staff}
+          canManage={isManager(me?.role)}
+          onChange={onStaffStatusChange}
         />
       </Section>
 
@@ -1189,6 +1223,124 @@ function Section({
   );
 }
 
+/** Allowed lifecycle actions per current status (mirrors the server's rules). */
+const STAFF_ACTIONS: Record<string, { label: string; status: string }[]> = {
+  onboarding: [{ label: "Activate", status: "active" }],
+  active: [
+    { label: "Set on leave", status: "on_leave" },
+    { label: "Retire", status: "retired" },
+    { label: "Terminate", status: "terminated" },
+  ],
+  on_leave: [
+    { label: "Reactivate", status: "active" },
+    { label: "Retire", status: "retired" },
+    { label: "Terminate", status: "terminated" },
+  ],
+  retired: [],
+  terminated: [],
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  active: "#9be8b4",
+  onboarding: "#7fd1ff",
+  on_leave: "#ffcf8f",
+  retired: "#c9b6ff",
+  terminated: "#ff8080",
+};
+
+function StatusBadge({ status }: { status: string }) {
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 600,
+        color: STATUS_COLORS[status] ?? "#e6e9f2",
+        background: "rgba(255,255,255,0.06)",
+        borderRadius: 6,
+        padding: "2px 8px",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {status.replace("_", " ")}
+    </span>
+  );
+}
+
+function StaffLifecycleRoster({
+  staff,
+  canManage,
+  onChange,
+}: {
+  staff: StaffRow[];
+  canManage: boolean;
+  onChange: (id: string, status: string, label: string) => void;
+}) {
+  if (staff.length === 0) {
+    return <p style={dim}>No staff in this branch yet.</p>;
+  }
+
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <thead>
+        <tr style={{ textAlign: "left", opacity: 0.6 }}>
+          {["Name", "Email", "Dept", "Status"].map((h) => (
+            <th key={h} style={{ padding: "6px 8px", fontWeight: 500 }}>
+              {h}
+            </th>
+          ))}
+          {canManage && (
+            <th style={{ padding: "6px 8px", fontWeight: 500 }}>Actions</th>
+          )}
+        </tr>
+      </thead>
+      <tbody>
+        {staff.map((s) => {
+          const actions = STAFF_ACTIONS[s.status] ?? [];
+          return (
+            <tr
+              key={s.staffProfileId}
+              style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}
+            >
+              <td style={{ padding: 8 }}>{s.fullName}</td>
+              <td style={{ padding: 8 }}>{s.email}</td>
+              <td style={{ padding: 8 }}>{s.department}</td>
+              <td style={{ padding: 8 }}>
+                <StatusBadge status={s.status} />
+              </td>
+              {canManage && (
+                <td style={{ padding: 8 }}>
+                  {actions.length === 0 ? (
+                    <span style={dim}>—</span>
+                  ) : (
+                    <span style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {actions.map((a) => (
+                        <button
+                          key={a.status}
+                          type="button"
+                          onClick={() =>
+                            onChange(
+                              s.staffProfileId,
+                              a.status,
+                              a.label.toLowerCase(),
+                            )
+                          }
+                          style={miniBtn}
+                        >
+                          {a.label}
+                        </button>
+                      ))}
+                    </span>
+                  )}
+                </td>
+              )}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 function Roster({
   rows,
   head,
@@ -1322,6 +1474,16 @@ const errStyle: React.CSSProperties = {
   color: "#ff8080",
   fontSize: 13,
   margin: 0,
+};
+const miniBtn: React.CSSProperties = {
+  padding: "4px 8px",
+  borderRadius: 6,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "#1a2138",
+  color: "#e6e9f2",
+  fontSize: 11,
+  fontWeight: 600,
+  cursor: "pointer",
 };
 const warnStyle: React.CSSProperties = {
   background: "#352713",

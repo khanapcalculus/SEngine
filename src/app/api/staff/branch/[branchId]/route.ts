@@ -1,6 +1,7 @@
 /**
  * GET /api/staff/branch/[branchId]
- * Returns the active staff roster for a branch.
+ * Returns the full staff roster for a branch (all lifecycle statuses) so the
+ * dashboard can manage transitions, not just view active educators.
  * RBAC: super_admin or branch_manager only (Guideline #4).
  */
 import { getDb } from "../../../../../db/client";
@@ -11,7 +12,7 @@ import {
 } from "../../../../../lib/auth";
 import { isUuid } from "../../../../../lib/validation";
 import { json, handleError } from "../../../../../lib/http";
-import { getActiveStaffForBranch } from "../../../../../modules/hr/staff.service";
+import { listStaffForBranch } from "../../../../../modules/hr/staff.service";
 
 export const runtime = "nodejs";
 
@@ -30,7 +31,7 @@ export async function GET(
     }
     assertBranchAccess(ctx, branchId);
 
-    const staff = await getActiveStaffForBranch(getDb(), branchId);
+    const staff = await listStaffForBranch(getDb(), branchId);
     return json({ branchId, count: staff.length, staff });
   } catch (err) {
     return handleError(err);

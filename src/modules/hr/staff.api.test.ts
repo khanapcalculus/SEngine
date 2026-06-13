@@ -41,15 +41,34 @@ function makeFakeDb() {
         const chain = {
           _filterEmail: undefined as string | undefined,
           _branchActive: undefined as string | undefined,
-          where: (clause: { __email?: string; __branch?: string }) => {
+          _branchAll: undefined as string | undefined,
+          where: (clause: {
+            __email?: string;
+            __branch?: string;
+            __col?: string;
+            __val?: string;
+          }) => {
             if (clause?.__email) chain._filterEmail = clause.__email;
             if (clause?.__branch) chain._branchActive = clause.__branch;
+            if (clause?.__col === "branch_id") chain._branchAll = clause.__val;
             return chain;
           },
           innerJoin: () => chain,
           limit: () => resolve(),
           then: (res: (v: unknown[]) => void) => res(resolve()),
         };
+        function rowFor(s: Record<string, unknown>) {
+          const u = state.users.find((x) => x.id === s.userId)!;
+          return {
+            staffProfileId: s.id,
+            userId: u.id,
+            fullName: u.fullName,
+            email: u.email,
+            department: s.department,
+            status: s.status,
+            hireDate: s.hireDate,
+          };
+        }
         function resolve(): unknown[] {
           if (tableName === "users" && chain._filterEmail) {
             return state.users
@@ -62,18 +81,13 @@ function makeFakeDb() {
                 (s) =>
                   s.branchId === chain._branchActive && s.status === "active",
               )
-              .map((s) => {
-                const u = state.users.find((x) => x.id === s.userId)!;
-                return {
-                  staffProfileId: s.id,
-                  userId: u.id,
-                  fullName: u.fullName,
-                  email: u.email,
-                  department: s.department,
-                  status: s.status,
-                  hireDate: s.hireDate,
-                };
-              });
+              .map(rowFor);
+          }
+          if (tableName === "staff_profiles" && chain._branchAll) {
+            // listStaffForBranch: all statuses for the branch.
+            return state.staff
+              .filter((s) => s.branchId === chain._branchAll)
+              .map(rowFor);
           }
           return [];
         }
@@ -274,7 +288,7 @@ describe("GET /api/staff/branch/[branchId]", () => {
     expect(res.status).toBe(400);
   });
 
-  it("200 returns only active staff for the branch", async () => {
+  it("200 returns ALL staff for the branch (any lifecycle status)", async () => {
     currentCtx = SUPER_ADMIN;
     state.users.push(
       { id: "u1", fullName: "Active One", email: "a@s.edu" },
@@ -302,8 +316,9 @@ describe("GET /api/staff/branch/[branchId]", () => {
     const res = await GET(new Request("http://x"), { params: { branchId } });
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.count).toBe(1);
-    expect(data.staff[0].userId).toBe("u1");
+    expect(data.count).toBe(2);
+    const statuses = data.staff.map((s: { status: string }) => s.status).sort();
+    expect(statuses).toEqual(["active", "onboarding"]);
   });
 
   it("403 when branch_manager reads another branch roster", async () => {
