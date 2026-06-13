@@ -4,6 +4,8 @@
  * zod later if desired without changing the route contracts.
  */
 
+import { isValidGrade, VALID_GRADES } from "../modules/sis/grading";
+
 export class ValidationError extends Error {
   constructor(
     message: string,
@@ -225,13 +227,36 @@ export function parseLogin(body: unknown): LoginInput {
   return { email, password };
 }
 
+export interface ResetPasswordInput {
+  userId: string;
+  newPassword: string;
+}
+
+/** Validate the POST /api/auth/reset-password body. */
+export function parseResetPassword(body: unknown): ResetPasswordInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.userId)) fields.userId = "userId must be a UUID";
+
+  const newPassword = typeof b.newPassword === "string" ? b.newPassword : "";
+  if (newPassword.length < 8 || newPassword.length > 1024)
+    fields.newPassword = "newPassword must be 8-1024 characters";
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { userId: b.userId as string, newPassword };
+}
+
 export interface CreateClassInput {
   subject: string;
   term: string;
   branchId: string;
+  credits: number;
 }
 
-/** Validate the POST /api/classes body. */
+/** Validate the POST /api/classes body. credits is optional (default 3). */
 export function parseCreateClass(body: unknown): CreateClassInput {
   const fields: Record<string, string> = {};
   const b = (body ?? {}) as Record<string, unknown>;
@@ -246,8 +271,254 @@ export function parseCreateClass(body: unknown): CreateClassInput {
 
   if (!isUuid(b.branchId)) fields.branchId = "branchId must be a UUID";
 
+  let credits = 3;
+  if (b.credits !== undefined) {
+    if (
+      typeof b.credits !== "number" ||
+      !Number.isInteger(b.credits) ||
+      b.credits < 1 ||
+      b.credits > 12
+    )
+      fields.credits = "credits must be an integer 1-12";
+    else credits = b.credits;
+  }
+
   if (Object.keys(fields).length > 0)
     throw new ValidationError("Invalid request body", fields);
 
-  return { subject, term, branchId: b.branchId as string };
+  return { subject, term, branchId: b.branchId as string, credits };
+}
+
+export interface GradeEnrollmentInput {
+  enrollmentId: string;
+  finalGrade: string;
+}
+
+/** Validate the POST /api/enrollments/grade body. */
+export function parseGradeEnrollment(body: unknown): GradeEnrollmentInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.enrollmentId))
+    fields.enrollmentId = "enrollmentId must be a UUID";
+
+  if (!isValidGrade(b.finalGrade))
+    fields.finalGrade = `finalGrade must be one of ${VALID_GRADES.join(", ")}`;
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return {
+    enrollmentId: b.enrollmentId as string,
+    finalGrade: b.finalGrade as string,
+  };
+}
+
+/** Outcomes a caller may request for a term progression. */
+export const PROMOTION_OUTCOMES = [
+  "promoted",
+  "retained",
+  "graduated",
+] as const;
+export type PromotionOutcome = (typeof PROMOTION_OUTCOMES)[number];
+
+export interface PromoteStudentInput {
+  studentProfileId: string;
+  term: string;
+  outcome: PromotionOutcome;
+}
+
+/** Validate the POST /api/students/promote body. outcome optional (default promoted). */
+export function parsePromoteStudent(body: unknown): PromoteStudentInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.studentProfileId))
+    fields.studentProfileId = "studentProfileId must be a UUID";
+
+  const term = typeof b.term === "string" ? b.term.trim() : "";
+  if (term.length < 1 || term.length > 64)
+    fields.term = "term required (1-64 chars)";
+
+  let outcome: PromotionOutcome = "promoted";
+  if (b.outcome !== undefined) {
+    if (
+      typeof b.outcome !== "string" ||
+      !PROMOTION_OUTCOMES.includes(b.outcome as PromotionOutcome)
+    )
+      fields.outcome = `outcome must be one of ${PROMOTION_OUTCOMES.join(", ")}`;
+    else outcome = b.outcome as PromotionOutcome;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { studentProfileId: b.studentProfileId as string, term, outcome };
+}
+
+export interface CreateOrganizationInput {
+  name: string;
+}
+
+/** Validate the POST /api/admin/organizations body. */
+export function parseCreateOrganization(
+  body: unknown,
+): CreateOrganizationInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  const name = typeof b.name === "string" ? b.name.trim() : "";
+  if (name.length < 1 || name.length > 255)
+    fields.name = "name required (1-255 chars)";
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { name };
+}
+
+/** Operational status a branch can be provisioned in (mirrors branchStatusEnum). */
+export const BRANCH_STATUSES = ["active", "inactive", "pending"] as const;
+export type BranchStatusInput = (typeof BRANCH_STATUSES)[number];
+
+export interface CreateBranchInput {
+  orgId: string;
+  location: string;
+  status: BranchStatusInput;
+}
+
+/** Validate the POST /api/admin/branches body. status is optional (default active). */
+export function parseCreateBranch(body: unknown): CreateBranchInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.orgId)) fields.orgId = "orgId must be a UUID";
+
+  const location = typeof b.location === "string" ? b.location.trim() : "";
+  if (location.length < 1 || location.length > 512)
+    fields.location = "location required (1-512 chars)";
+
+  let status: BranchStatusInput = "active";
+  if (b.status !== undefined) {
+    if (
+      typeof b.status !== "string" ||
+      !BRANCH_STATUSES.includes(b.status as BranchStatusInput)
+    )
+      fields.status = `status must be one of ${BRANCH_STATUSES.join(", ")}`;
+    else status = b.status as BranchStatusInput;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { orgId: b.orgId as string, location, status };
+}
+
+/**
+ * Target staff statuses a lifecycle action may move TO. "onboarding" is the
+ * initial state only — it is never a transition target — so it is excluded.
+ */
+export const STAFF_TARGET_STATUSES = [
+  "active",
+  "on_leave",
+  "retired",
+  "terminated",
+] as const;
+export type StaffTargetStatus = (typeof STAFF_TARGET_STATUSES)[number];
+
+export interface ChangeStaffStatusInput {
+  staffProfileId: string;
+  status: StaffTargetStatus;
+  /** Offboarding date stamped onto retirementDate for retire/terminate. */
+  effectiveDate?: string;
+}
+
+/** Validate the POST /api/staff/status body. (Transition legality is the service's job.) */
+export function parseChangeStaffStatus(body: unknown): ChangeStaffStatusInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.staffProfileId))
+    fields.staffProfileId = "staffProfileId must be a UUID";
+
+  const status = typeof b.status === "string" ? b.status : "";
+  if (!STAFF_TARGET_STATUSES.includes(status as StaffTargetStatus))
+    fields.status = `status must be one of ${STAFF_TARGET_STATUSES.join(", ")}`;
+
+  let effectiveDate: string | undefined;
+  if (b.effectiveDate !== undefined) {
+    if (
+      typeof b.effectiveDate !== "string" ||
+      !ISO_DATE_RE.test(b.effectiveDate) ||
+      Number.isNaN(Date.parse(b.effectiveDate))
+    )
+      fields.effectiveDate = "effectiveDate must be ISO yyyy-mm-dd";
+    else effectiveDate = b.effectiveDate;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return {
+    staffProfileId: b.staffProfileId as string,
+    status: status as StaffTargetStatus,
+    effectiveDate,
+  };
+}
+
+/** Roles a staff member can hold on a class roster (mirrors the DB enum). */
+export const STAFF_ASSIGNMENT_ROLES = ["lead", "assistant"] as const;
+export type StaffAssignmentRole = (typeof STAFF_ASSIGNMENT_ROLES)[number];
+
+export interface AssignStaffInput {
+  staffProfileId: string;
+  classId: string;
+  role: StaffAssignmentRole;
+}
+
+/** Validate the POST /api/staff/assign body. role is optional (default lead). */
+export function parseAssignStaff(body: unknown): AssignStaffInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.staffProfileId))
+    fields.staffProfileId = "staffProfileId must be a UUID";
+  if (!isUuid(b.classId)) fields.classId = "classId must be a UUID";
+
+  let role: StaffAssignmentRole = "lead";
+  if (b.role !== undefined) {
+    if (
+      typeof b.role !== "string" ||
+      !STAFF_ASSIGNMENT_ROLES.includes(b.role as StaffAssignmentRole)
+    )
+      fields.role = `role must be one of ${STAFF_ASSIGNMENT_ROLES.join(", ")}`;
+    else role = b.role as StaffAssignmentRole;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return {
+    staffProfileId: b.staffProfileId as string,
+    classId: b.classId as string,
+    role,
+  };
+}
+
+export interface UnassignStaffInput {
+  assignmentId: string;
+}
+
+/** Validate the POST /api/staff/unassign body. */
+export function parseUnassignStaff(body: unknown): UnassignStaffInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.assignmentId))
+    fields.assignmentId = "assignmentId must be a UUID";
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { assignmentId: b.assignmentId as string };
 }

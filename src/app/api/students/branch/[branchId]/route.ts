@@ -4,7 +4,11 @@
  * RBAC: super_admin, branch_manager, or teacher.
  */
 import { getDb } from "../../../../../db/client";
-import { getAuthContext, requireRole } from "../../../../../lib/auth";
+import {
+  getAuthContext,
+  requireRole,
+  assertBranchAccess,
+} from "../../../../../lib/auth";
 import { isUuid } from "../../../../../lib/validation";
 import { json, handleError } from "../../../../../lib/http";
 import { getActiveStudentsForBranch } from "../../../../../modules/sis/student.service";
@@ -23,6 +27,7 @@ export async function GET(
     if (!isUuid(branchId)) {
       return json({ error: "branchId must be a UUID" }, 400);
     }
+    assertBranchAccess(ctx, branchId);
 
     const students = await getActiveStudentsForBranch(getDb(), branchId);
     return json({ branchId, count: students.length, students });

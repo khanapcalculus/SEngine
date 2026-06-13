@@ -24,6 +24,7 @@ import {
   text,
   date,
   integer,
+  numeric,
   timestamp,
   jsonb,
   index,
@@ -77,6 +78,19 @@ export const enrollmentStatusEnum = pgEnum("enrollment_status", [
   "enrolled",
   "completed",
   "withdrawn",
+]);
+
+/** A staff member's role on a class roster (ERD: Staff_Assignments.Role). */
+export const staffAssignmentRoleEnum = pgEnum("staff_assignment_role", [
+  "lead", // primary educator of record for the section
+  "assistant", // supporting educator / TA
+]);
+
+/** Outcome of a term-over-term progression decision (Module 3). */
+export const promotionOutcomeEnum = pgEnum("student_promotion_outcome", [
+  "promoted", // advanced to the next level
+  "retained", // held at the same level
+  "graduated", // completed the program
 ]);
 
 /* ─────────────────────────── Organizations ─────────────────────── */
@@ -222,6 +236,8 @@ export const studentProfiles = pgTable(
     enrollmentDate: date("enrollment_date").notNull(),
     cohortYear: integer("cohort_year").notNull(),
     status: studentStatusEnum("status").notNull().default("active"),
+    /** Current year/grade level; incremented by a "promoted" progression. */
+    currentLevel: integer("current_level").notNull().default(1),
     graduationDate: date("graduation_date"), // null until graduated
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -255,6 +271,8 @@ export const classes = pgTable(
       .references(() => branches.id, { onDelete: "cascade" }),
     subject: varchar("subject", { length: 255 }).notNull(),
     term: varchar("term", { length: 64 }).notNull(),
+    /** Credit-hours this section is worth; weights the transcript GPA. */
+    credits: integer("credits").notNull().default(3),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -299,6 +317,80 @@ export const enrollments = pgTable(
     ),
     // "Who is in this class?" roster lookup.
     classIdx: index("enrollments_class_id_idx").on(t.classId),
+  }),
+);
+
+/* ───────────────────────── Staff Assignments ───────────────────── */
+/**
+ * Module 2 — Assignment Routing. Join of a staff member to a class they work,
+ * with a role (lead / assistant). Mirrors enrollments: a staff member may work
+ * many classes; a class has many staff — but each pairing exists at most ONCE,
+ * enforced by a unique (staff, class).
+ */
+export const staffAssignments = pgTable(
+  "staff_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffId: uuid("staff_id")
+      .notNull()
+      .references(() => staffProfiles.id, { onDelete: "cascade" }),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    role: staffAssignmentRoleEnum("role").notNull().default("lead"),
+    assignedAt: timestamp("assigned_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // A staff member is assigned to a given class at most once.
+    staffClassUq: uniqueIndex("staff_assignments_staff_class_idx").on(
+      t.staffId,
+      t.classId,
+    ),
+    // "Who staffs this class?" roster lookup.
+    classIdx: index("staff_assignments_class_id_idx").on(t.classId),
+    // "What does this educator work?" — the reverse routing lookup.
+    staffIdx: index("staff_assignments_staff_id_idx").on(t.staffId),
+  }),
+);
+
+/* ─────────────────────────── Student Promotions ────────────────── */
+/**
+ * Module 3 — Academic Progression. Append-only history of term-over-term
+ * progression decisions for a student. One row per evaluated term, capturing
+ * the level transition, the term GPA snapshot, and the outcome. Like audit
+ * logs, rows are written once and only ever read — the transcript reads these.
+ */
+export const studentPromotions = pgTable(
+  "student_promotions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => studentProfiles.id, { onDelete: "cascade" }),
+    term: varchar("term", { length: 64 }).notNull(),
+    fromLevel: integer("from_level").notNull(),
+    toLevel: integer("to_level").notNull(),
+    /** Credit-weighted GPA for the term, snapshotted at decision time. */
+    termGpa: numeric("term_gpa", { precision: 4, scale: 2 }),
+    outcome: promotionOutcomeEnum("outcome").notNull(),
+    actorId: uuid("actor_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // Newest-first progression history per student (the transcript view).
+    studentCreatedIdx: index("student_promotions_student_created_idx").on(
+      t.studentId,
+      t.createdAt,
+    ),
   }),
 );
 
@@ -370,6 +462,17 @@ export const studentProfilesRelations = relations(
       references: [branches.id],
     }),
     enrollments: many(enrollments),
+    promotions: many(studentPromotions),
+  }),
+);
+
+export const studentPromotionsRelations = relations(
+  studentPromotions,
+  ({ one }) => ({
+    student: one(studentProfiles, {
+      fields: [studentPromotions.studentId],
+      references: [studentProfiles.id],
+    }),
   }),
 );
 
@@ -379,6 +482,7 @@ export const classesRelations = relations(classes, ({ one, many }) => ({
     references: [branches.id],
   }),
   enrollments: many(enrollments),
+  staffAssignments: many(staffAssignments),
 }));
 
 export const enrollmentsRelations = relations(enrollments, ({ one }) => ({
@@ -403,13 +507,31 @@ export const usersRelations = relations(users, ({ one }) => ({
   }),
 }));
 
-export const staffProfilesRelations = relations(staffProfiles, ({ one }) => ({
-  user: one(users, {
-    fields: [staffProfiles.userId],
-    references: [users.id],
+export const staffProfilesRelations = relations(
+  staffProfiles,
+  ({ one, many }) => ({
+    user: one(users, {
+      fields: [staffProfiles.userId],
+      references: [users.id],
+    }),
+    branch: one(branches, {
+      fields: [staffProfiles.branchId],
+      references: [branches.id],
+    }),
+    assignments: many(staffAssignments),
   }),
-  branch: one(branches, {
-    fields: [staffProfiles.branchId],
-    references: [branches.id],
+);
+
+export const staffAssignmentsRelations = relations(
+  staffAssignments,
+  ({ one }) => ({
+    staff: one(staffProfiles, {
+      fields: [staffAssignments.staffId],
+      references: [staffProfiles.id],
+    }),
+    class: one(classes, {
+      fields: [staffAssignments.classId],
+      references: [classes.id],
+    }),
   }),
-}));
+);

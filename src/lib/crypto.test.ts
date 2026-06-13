@@ -11,6 +11,7 @@ import {
   base64UrlToBytes,
   stringToBase64Url,
   base64UrlToString,
+  generateTemporaryPassword,
 } from "./crypto";
 
 describe("base64url round-trips", () => {
@@ -60,5 +61,28 @@ describe("password hashing (PBKDF2)", () => {
   it("rejects malformed stored hashes safely", async () => {
     expect(await verifyPassword("x", "not-a-valid-hash")).toBe(false);
     expect(await verifyPassword("x", "pbkdf2$abc$salt$hash")).toBe(false);
+  });
+});
+
+describe("temporary password generation", () => {
+  it("generates 8-character alphanumeric passwords", () => {
+    const password = generateTemporaryPassword();
+    expect(password).toHaveLength(8);
+    expect(password).toMatch(/^[A-Za-z0-9]{8}$/);
+  });
+
+  it("generates different passwords each time", () => {
+    const passwords = new Set();
+    for (let i = 0; i < 10; i++) {
+      passwords.add(generateTemporaryPassword());
+    }
+    expect(passwords.size).toBeGreaterThan(1);
+  });
+
+  it("generated passwords can be hashed and verified", async () => {
+    const password = generateTemporaryPassword();
+    const hash = await hashPassword(password);
+    expect(await verifyPassword(password, hash)).toBe(true);
+    expect(await verifyPassword("wrongpassword", hash)).toBe(false);
   });
 });

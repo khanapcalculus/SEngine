@@ -26,5 +26,35 @@ export function handleError(err: unknown): Response {
   if (err instanceof ValidationError) {
     return json({ error: err.message, fields: err.fields }, 400);
   }
+  if (isSchemaDriftError(err)) {
+    return errorResponse(
+      "Database schema is out of date. Apply the latest migrations and redeploy.",
+      500,
+    );
+  }
   return errorResponse("Internal server error", 500);
+}
+
+function isSchemaDriftError(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown; cause?: unknown };
+  const code = typeof e?.code === "string" ? e.code : "";
+  const message = typeof e?.message === "string" ? e.message : "";
+  const cause = e?.cause as { code?: unknown; message?: unknown } | undefined;
+  const causeCode = typeof cause?.code === "string" ? cause.code : "";
+  const causeMessage = typeof cause?.message === "string" ? cause.message : "";
+
+  const codes = new Set([
+    "42P01", // undefined_table
+    "42703", // undefined_column
+    "42704", // undefined_object/type
+  ]);
+
+  if (codes.has(code) || codes.has(causeCode)) return true;
+
+  const haystack = `${message}\n${causeMessage}`.toLowerCase();
+  return (
+    (haystack.includes("relation") && haystack.includes("does not exist")) ||
+    (haystack.includes("column") && haystack.includes("does not exist")) ||
+    (haystack.includes("type") && haystack.includes("does not exist"))
+  );
 }

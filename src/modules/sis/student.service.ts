@@ -18,6 +18,7 @@ import type {
 } from "../../lib/validation";
 import { ValidationError } from "../../lib/validation";
 import { writeAudit } from "../audit/audit.service";
+import { generateTemporaryPassword, hashPassword } from "../../lib/crypto";
 
 /** The authenticated caller performing a mutation (for the audit trail). */
 export interface Actor {
@@ -30,6 +31,7 @@ export interface EnrolledStudent {
   studentProfileId: string;
   email: string;
   cohortYear: number;
+  temporaryPassword: string;
 }
 
 /**
@@ -54,6 +56,10 @@ export async function enrollStudent(
       });
     }
 
+    // Generate a secure temporary password
+    const temporaryPassword = generateTemporaryPassword();
+    const passwordHash = await hashPassword(temporaryPassword);
+
     const [user] = await tx
       .insert(users)
       .values({
@@ -62,6 +68,7 @@ export async function enrollStudent(
         fullName: input.fullName,
         role: "student",
         globalStatus: "active",
+        passwordHash,
       })
       .returning({ id: users.id, email: users.email });
 
@@ -91,6 +98,7 @@ export async function enrollStudent(
       studentProfileId: profile.id,
       email: user.email,
       cohortYear: input.cohortYear,
+      temporaryPassword,
     };
   });
 }

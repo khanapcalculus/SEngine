@@ -3,7 +3,11 @@
  * Creates a course section (+ audit). RBAC: super_admin or branch_manager.
  */
 import { getDb } from "../../../../db/client";
-import { getAuthContext, requireRole, assertBranchScope } from "../../../../lib/auth";
+import {
+  getAuthContext,
+  requireRole,
+  assertBranchAccess,
+} from "../../../../lib/auth";
 import { parseCreateClass } from "../../../../lib/validation";
 import { json, handleError } from "../../../../lib/http";
 import { createClass } from "../../../../modules/sis/class.service";
@@ -23,8 +27,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     const input = parseCreateClass(raw);
-    // Branch managers may only create classes within their own tenant.
-    assertBranchScope(ctx, ctx.orgId);
+    assertBranchAccess(ctx, input.branchId);
 
     const result = await createClass(getDb(), input, {
       userId: ctx.userId,
