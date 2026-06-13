@@ -188,6 +188,37 @@ export async function listAssignmentsForBranch(
     .where(eq(classes.branchId, branchId));
 }
 
+export interface StaffUserClassRow {
+  classId: string;
+  subject: string;
+  term: string;
+  credits: number;
+  role: string;
+}
+
+/**
+ * The classes a staff member works, resolved by their USER id (self-service).
+ * Powers a teacher's "My Classes" — never takes a client-supplied staff id, so
+ * a teacher can only ever see their own roster.
+ */
+export async function listClassesForStaffUser(
+  db: DB,
+  userId: string,
+): Promise<StaffUserClassRow[]> {
+  return db
+    .select({
+      classId: classes.id,
+      subject: classes.subject,
+      term: classes.term,
+      credits: classes.credits,
+      role: staffAssignments.role,
+    })
+    .from(staffAssignments)
+    .innerJoin(staffProfiles, eq(staffAssignments.staffId, staffProfiles.id))
+    .innerJoin(classes, eq(staffAssignments.classId, classes.id))
+    .where(eq(staffProfiles.userId, userId));
+}
+
 export interface UnassignResult {
   assignmentId: string;
   classId: string;

@@ -157,3 +157,63 @@ export async function listEnrollmentsForBranch(
     .innerJoin(users, eq(studentProfiles.userId, users.id))
     .where(eq(classes.branchId, branchId));
 }
+
+/**
+ * Gradebook for a TEACHER, resolved by their user id (self-service): every
+ * enrollment in a class they are assigned to. Never takes a client branch/class
+ * id, so a teacher only ever sees rosters for classes they actually staff.
+ */
+export async function listGradebookForStaffUser(
+  db: DB,
+  userId: string,
+): Promise<BranchEnrollmentRow[]> {
+  return db
+    .select({
+      enrollmentId: enrollments.id,
+      classId: enrollments.classId,
+      classSubject: classes.subject,
+      term: classes.term,
+      credits: classes.credits,
+      studentProfileId: studentProfiles.id,
+      studentName: users.fullName,
+      status: enrollments.status,
+      finalGrade: enrollments.finalGrade,
+    })
+    .from(enrollments)
+    .innerJoin(classes, eq(enrollments.classId, classes.id))
+    .innerJoin(staffAssignments, eq(staffAssignments.classId, classes.id))
+    .innerJoin(staffProfiles, eq(staffAssignments.staffId, staffProfiles.id))
+    .innerJoin(studentProfiles, eq(enrollments.studentId, studentProfiles.id))
+    .innerJoin(users, eq(studentProfiles.userId, users.id))
+    .where(eq(staffProfiles.userId, userId));
+}
+
+export interface StudentEnrollmentRow {
+  classSubject: string;
+  term: string;
+  credits: number;
+  status: string;
+  finalGrade: string | null;
+}
+
+/**
+ * A STUDENT's own enrollments, resolved by their user id (self-service). Powers
+ * "My Enrollments" — keyed off the session user, never a client id.
+ */
+export async function listEnrollmentsForStudentUser(
+  db: DB,
+  userId: string,
+): Promise<StudentEnrollmentRow[]> {
+  return db
+    .select({
+      classSubject: classes.subject,
+      term: classes.term,
+      credits: classes.credits,
+      status: enrollments.status,
+      finalGrade: enrollments.finalGrade,
+    })
+    .from(enrollments)
+    .innerJoin(classes, eq(enrollments.classId, classes.id))
+    .innerJoin(studentProfiles, eq(enrollments.studentId, studentProfiles.id))
+    .where(eq(studentProfiles.userId, userId));
+}

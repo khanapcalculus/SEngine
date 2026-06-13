@@ -59,10 +59,53 @@ export interface Transcript {
   promotions: TranscriptPromotion[];
 }
 
+/**
+ * Resolve the student_profile id owned by a user (self-service transcript).
+ * Returns null if the user has no student profile.
+ */
+export async function getStudentProfileIdByUser(
+  db: DB,
+  userId: string,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ id: studentProfiles.id })
+    .from(studentProfiles)
+    .where(eq(studentProfiles.userId, userId))
+    .limit(1);
+  return row?.id ?? null;
+}
+
+/**
+ * Manager/admin transcript view: enforces branch scope against the student's
+ * branch (the route can't assert on an id it hasn't read), then assembles.
+ */
 export async function getTranscript(
   db: DB,
   studentProfileId: string,
   ctx: AuthContext,
+): Promise<Transcript> {
+  const [scopeRow] = await db
+    .select({ branchId: studentProfiles.branchId })
+    .from(studentProfiles)
+    .where(eq(studentProfiles.id, studentProfileId))
+    .limit(1);
+  if (!scopeRow) {
+    throw new ValidationError("Student profile not found", {
+      studentProfileId: "no such student profile",
+    });
+  }
+  assertBranchAccess(ctx, scopeRow.branchId);
+  return assembleTranscript(db, studentProfileId);
+}
+
+/**
+ * Build a transcript payload with NO access guard — callers (the manager route
+ * via getTranscript, or the self-service /api/me/transcript route) are
+ * responsible for authorization before calling this.
+ */
+export async function assembleTranscript(
+  db: DB,
+  studentProfileId: string,
 ): Promise<Transcript> {
   const [student] = await db
     .select({
@@ -86,8 +129,6 @@ export async function getTranscript(
       studentProfileId: "no such student profile",
     });
   }
-
-  assertBranchAccess(ctx, student.branchId);
 
   const courseRows = await db
     .select({
