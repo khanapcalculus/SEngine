@@ -39,6 +39,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
 interface Row { id: string; [k: string]: unknown }
 type State = Record<string, Row[]>;
 let state: State;
+let auditInsertError: Error | null;
 
 function tableName(table: unknown): string {
   const sym = Object.getOwnPropertySymbols(table as object).find((s) =>
@@ -98,6 +99,9 @@ function makeFakeDb() {
     insert: (table: unknown) => ({
       values: (vals: Record<string, unknown>) => {
         const name = tableName(table);
+        if (name === "audit_logs" && auditInsertError) {
+          throw auditInsertError;
+        }
         (state[name] ||= []).push({
           id: `${name}-${state[name].length + 1}`,
           ...vals,
@@ -121,7 +125,14 @@ vi.mock("../../db/client", () => ({ getDb: () => makeFakeDb() }));
 /* ── Fixtures ───────────────────────────────────────────────────── */
 const ORG = "22222222-2222-2222-2222-222222222222";
 const BRANCH = "11111111-1111-1111-1111-111111111111";
+const OTHER_BRANCH = "99999999-9999-9999-9999-999999999999";
 const SUPER_ADMIN: AuthContext = { userId: "sa-1", role: "super_admin", orgId: ORG, branchId: BRANCH };
+const BRANCH_MGR: AuthContext = {
+  userId: "bm-1",
+  role: "branch_manager",
+  orgId: ORG,
+  branchId: BRANCH,
+};
 const TEACHER: AuthContext = { userId: "t-1", role: "teacher", orgId: ORG, branchId: BRANCH };
 
 function post(body: unknown): Request {
@@ -141,6 +152,7 @@ beforeEach(() => {
     enrollments: [],
     audit_logs: [],
   };
+  auditInsertError = null;
 });
 
 /* ── Class creation ─────────────────────────────────────────────── */
@@ -166,6 +178,13 @@ describe("POST /api/classes/create", () => {
     expect(res.status).toBe(400);
   });
 
+  it("403 when branch_manager creates a class in another branch", async () => {
+    currentCtx = BRANCH_MGR;
+    const { POST } = await import("../../app/api/classes/create/route");
+    const res = await POST(post({ ...body, branchId: OTHER_BRANCH }));
+    expect(res.status).toBe(403);
+  });
+
   it("201 creates the class AND writes an audit row", async () => {
     currentCtx = SUPER_ADMIN;
     const { POST } = await import("../../app/api/classes/create/route");
@@ -180,6 +199,20 @@ describe("POST /api/classes/create", () => {
     expect(state.audit_logs[0].action).toBe("class.create");
     expect(state.audit_logs[0].actorId).toBe("sa-1");
     expect(state.audit_logs[0].branchId).toBe(BRANCH);
+  });
+
+  it("500 with actionable message when the audit table is missing", async () => {
+    currentCtx = SUPER_ADMIN;
+    auditInsertError = Object.assign(
+      new Error('relation "audit_logs" does not exist'),
+      { code: "42P01" },
+    );
+    const { POST } = await import("../../app/api/classes/create/route");
+    const res = await POST(post(body));
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe(
+      "Database schema is out of date. Apply the latest migrations and redeploy.",
+    );
   });
 });
 
@@ -209,6 +242,15 @@ describe("GET /api/classes/branch/[branchId]", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("403 when a teacher requests classes for another branch", async () => {
+    currentCtx = TEACHER;
+    const { GET } = await import("../../app/api/classes/branch/[branchId]/route");
+    const res = await GET(new Request("http://x"), {
+      params: Promise.resolve({ branchId: OTHER_BRANCH }),
+    });
+    expect(res.status).toBe(403);
+  });
 });
 
 /* ── Student roster ─────────────────────────────────────────────── */
@@ -231,6 +273,15 @@ describe("GET /api/students/branch/[branchId]", () => {
     const data = await res.json();
     expect(data.count).toBe(1);
     expect(data.students[0].fullName).toBe("Raj Patel");
+  });
+
+  it("403 when a teacher requests another branch's students", async () => {
+    currentCtx = TEACHER;
+    const { GET } = await import("../../app/api/students/branch/[branchId]/route");
+    const res = await GET(new Request("http://x"), {
+      params: Promise.resolve({ branchId: OTHER_BRANCH }),
+    });
+    expect(res.status).toBe(403);
   });
 });
 
@@ -257,5 +308,14 @@ describe("GET /api/audit/branch/[branchId]", () => {
     });
     expect(res.status).toBe(200);
     expect((await res.json()).count).toBe(1);
+  });
+
+  it("403 when a branch_manager requests another branch's audit feed", async () => {
+    currentCtx = BRANCH_MGR;
+    const { GET } = await import("../../app/api/audit/branch/[branchId]/route");
+    const res = await GET(new Request("http://x"), {
+      params: Promise.resolve({ branchId: OTHER_BRANCH }),
+    });
+    expect(res.status).toBe(403);
   });
 });

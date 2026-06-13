@@ -113,10 +113,30 @@ const ORG = "22222222-2222-2222-2222-222222222222";
 const BRANCH = "11111111-1111-1111-1111-111111111111";
 const OTHER_BRANCH = "99999999-9999-9999-9999-999999999999";
 
-const SUPER_ADMIN: AuthContext = { userId: "sa-1", role: "super_admin", orgId: null };
-const BRANCH_MGR: AuthContext = { userId: "bm-1", role: "branch_manager", orgId: ORG };
-const TEACHER: AuthContext = { userId: "meghan", role: "teacher", orgId: ORG };
-const PARENT: AuthContext = { userId: "p-1", role: "parent", orgId: ORG };
+const SUPER_ADMIN: AuthContext = {
+  userId: "sa-1",
+  role: "super_admin",
+  orgId: null,
+  branchId: null,
+};
+const BRANCH_MGR: AuthContext = {
+  userId: "bm-1",
+  role: "branch_manager",
+  orgId: ORG,
+  branchId: BRANCH,
+};
+const TEACHER: AuthContext = {
+  userId: "meghan",
+  role: "teacher",
+  orgId: ORG,
+  branchId: BRANCH,
+};
+const PARENT: AuthContext = {
+  userId: "p-1",
+  role: "parent",
+  orgId: ORG,
+  branchId: BRANCH,
+};
 
 const RAJ = {
   email: "raj.patel@lincolnhigh.edu",
@@ -170,6 +190,18 @@ describe("POST /api/students/enroll", () => {
     expect(res.status).toBe(403);
   });
 
+  it("403 when branch_manager enrolls into another branch", async () => {
+    currentCtx = BRANCH_MGR;
+    const { POST } = await import("../../app/api/students/enroll/route");
+    const res = await POST(
+      req("http://x", {
+        ...RAJ,
+        branchId: OTHER_BRANCH,
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
   it("201 enrolls Raj Patel as a student", async () => {
     currentCtx = BRANCH_MGR;
     const { POST } = await import("../../app/api/students/enroll/route");
@@ -215,7 +247,12 @@ describe("POST /api/classes/assign", () => {
   }
 
   it("403 when a student tries to self-assign (RBAC)", async () => {
-    currentCtx = { userId: "u-raj", role: "student", orgId: ORG };
+    currentCtx = {
+      userId: "u-raj",
+      role: "student",
+      orgId: ORG,
+      branchId: BRANCH,
+    };
     seedRajAndAlgebra2();
     const { POST } = await import("../../app/api/classes/assign/route");
     const res = await POST(req("http://x", { studentId, classId }));

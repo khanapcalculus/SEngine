@@ -4,7 +4,11 @@
  * RBAC: super_admin or branch_manager only — the audit trail is sensitive.
  */
 import { getDb } from "../../../../../db/client";
-import { getAuthContext, requireRole } from "../../../../../lib/auth";
+import {
+  getAuthContext,
+  requireRole,
+  assertBranchAccess,
+} from "../../../../../lib/auth";
 import { isUuid } from "../../../../../lib/validation";
 import { json, handleError } from "../../../../../lib/http";
 import { listAuditForBranch } from "../../../../../modules/audit/audit.service";
@@ -23,6 +27,7 @@ export async function GET(
     if (!isUuid(branchId)) {
       return json({ error: "branchId must be a UUID" }, 400);
     }
+    assertBranchAccess(ctx, branchId);
 
     const entries = await listAuditForBranch(getDb(), branchId);
     return json({ branchId, count: entries.length, entries });

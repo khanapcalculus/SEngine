@@ -115,3 +115,17 @@ export function assertBranchScope(
   }
   throw new AuthError(403, "Branch is outside the caller's tenant scope");
 }
+
+/**
+ * Branch-scoped guard: non-super-admin users may only access the single branch
+ * embedded in their verified session. This keeps branch managers/teachers from
+ * hopping across branch ids by editing client requests.
+ */
+export function assertBranchAccess(
+  ctx: AuthContext,
+  targetBranchId: string,
+): void {
+  if (ctx.role === "super_admin") return;
+  if (ctx.branchId && ctx.branchId === targetBranchId) return;
+  throw new AuthError(403, "Branch is outside the caller's branch scope");
+}

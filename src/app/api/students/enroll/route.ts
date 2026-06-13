@@ -7,6 +7,7 @@ import { getDb } from "../../../../db/client";
 import {
   getAuthContext,
   requireRole,
+  assertBranchAccess,
   assertBranchScope,
 } from "../../../../lib/auth";
 import { parseEnrollStudent } from "../../../../lib/validation";
@@ -30,6 +31,7 @@ export async function POST(req: Request): Promise<Response> {
     const input = parseEnrollStudent(raw);
     // Branch managers may only enroll into their own tenant.
     assertBranchScope(ctx, input.orgId);
+    assertBranchAccess(ctx, input.branchId);
 
     const result = await enrollStudent(getDb(), input, {
       userId: ctx.userId,

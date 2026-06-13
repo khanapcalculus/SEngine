@@ -151,13 +151,20 @@ const SUPER_ADMIN: AuthContext = {
   userId: "sa-1",
   role: "super_admin",
   orgId: null,
+  branchId: null,
 };
 const BRANCH_MGR: AuthContext = {
   userId: "bm-1",
   role: "branch_manager",
   orgId: "22222222-2222-2222-2222-222222222222",
+  branchId: "11111111-1111-1111-1111-111111111111",
 };
-const TEACHER: AuthContext = { userId: "t-1", role: "teacher", orgId: "22222222-2222-2222-2222-222222222222" };
+const TEACHER: AuthContext = {
+  userId: "t-1",
+  role: "teacher",
+  orgId: "22222222-2222-2222-2222-222222222222",
+  branchId: "11111111-1111-1111-1111-111111111111",
+};
 
 function postReq(body: unknown): Request {
   return new Request("http://x/api/staff/onboard", {
@@ -208,6 +215,18 @@ describe("POST /api/staff/onboard", () => {
     const { POST } = await import("../../app/api/staff/onboard/route");
     const res = await POST(
       postReq({ ...VALID_BODY, orgId: "33333333-3333-3333-3333-333333333333" }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("403 when branch_manager onboards into another branch", async () => {
+    currentCtx = BRANCH_MGR;
+    const { POST } = await import("../../app/api/staff/onboard/route");
+    const res = await POST(
+      postReq({
+        ...VALID_BODY,
+        branchId: "44444444-4444-4444-4444-444444444444",
+      }),
     );
     expect(res.status).toBe(403);
   });
@@ -285,5 +304,16 @@ describe("GET /api/staff/branch/[branchId]", () => {
     const data = await res.json();
     expect(data.count).toBe(1);
     expect(data.staff[0].userId).toBe("u1");
+  });
+
+  it("403 when branch_manager reads another branch roster", async () => {
+    currentCtx = BRANCH_MGR;
+    const { GET } = await import("../../app/api/staff/branch/[branchId]/route");
+    const res = await GET(new Request("http://x"), {
+      params: Promise.resolve({
+        branchId: "44444444-4444-4444-4444-444444444444",
+      }),
+    });
+    expect(res.status).toBe(403);
   });
 });

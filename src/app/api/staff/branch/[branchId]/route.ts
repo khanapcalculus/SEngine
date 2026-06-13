@@ -4,7 +4,11 @@
  * RBAC: super_admin or branch_manager only (Guideline #4).
  */
 import { getDb } from "../../../../../db/client";
-import { getAuthContext, requireRole } from "../../../../../lib/auth";
+import {
+  getAuthContext,
+  requireRole,
+  assertBranchAccess,
+} from "../../../../../lib/auth";
 import { isUuid } from "../../../../../lib/validation";
 import { json, handleError } from "../../../../../lib/http";
 import { getActiveStaffForBranch } from "../../../../../modules/hr/staff.service";
@@ -24,6 +28,7 @@ export async function GET(
     if (!isUuid(branchId)) {
       return json({ error: "branchId must be a UUID" }, 400);
     }
+    assertBranchAccess(ctx, branchId);
 
     const staff = await getActiveStaffForBranch(getDb(), branchId);
     return json({ branchId, count: staff.length, staff });

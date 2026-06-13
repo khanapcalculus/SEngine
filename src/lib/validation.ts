@@ -251,3 +251,61 @@ export function parseCreateClass(body: unknown): CreateClassInput {
 
   return { subject, term, branchId: b.branchId as string };
 }
+
+export interface CreateOrganizationInput {
+  name: string;
+}
+
+/** Validate the POST /api/admin/organizations body. */
+export function parseCreateOrganization(
+  body: unknown,
+): CreateOrganizationInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  const name = typeof b.name === "string" ? b.name.trim() : "";
+  if (name.length < 1 || name.length > 255)
+    fields.name = "name required (1-255 chars)";
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { name };
+}
+
+/** Operational status a branch can be provisioned in (mirrors branchStatusEnum). */
+export const BRANCH_STATUSES = ["active", "inactive", "pending"] as const;
+export type BranchStatusInput = (typeof BRANCH_STATUSES)[number];
+
+export interface CreateBranchInput {
+  orgId: string;
+  location: string;
+  status: BranchStatusInput;
+}
+
+/** Validate the POST /api/admin/branches body. status is optional (default active). */
+export function parseCreateBranch(body: unknown): CreateBranchInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.orgId)) fields.orgId = "orgId must be a UUID";
+
+  const location = typeof b.location === "string" ? b.location.trim() : "";
+  if (location.length < 1 || location.length > 512)
+    fields.location = "location required (1-512 chars)";
+
+  let status: BranchStatusInput = "active";
+  if (b.status !== undefined) {
+    if (
+      typeof b.status !== "string" ||
+      !BRANCH_STATUSES.includes(b.status as BranchStatusInput)
+    )
+      fields.status = `status must be one of ${BRANCH_STATUSES.join(", ")}`;
+    else status = b.status as BranchStatusInput;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { orgId: b.orgId as string, location, status };
+}

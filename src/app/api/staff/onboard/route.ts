@@ -7,6 +7,7 @@ import { getDb } from "../../../../db/client";
 import {
   getAuthContext,
   requireRole,
+  assertBranchAccess,
   assertBranchScope,
 } from "../../../../lib/auth";
 import { parseOnboardStaff } from "../../../../lib/validation";
@@ -30,6 +31,7 @@ export async function POST(req: Request): Promise<Response> {
     const input = parseOnboardStaff(raw);
     // Branch managers may only onboard into their own tenant.
     assertBranchScope(ctx, input.orgId);
+    assertBranchAccess(ctx, input.branchId);
 
     const result = await onboardStaff(getDb(), input, {
       userId: ctx.userId,
