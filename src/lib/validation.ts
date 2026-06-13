@@ -356,6 +356,240 @@ export function parsePromoteStudent(body: unknown): PromoteStudentInput {
   return { studentProfileId: b.studentProfileId as string, term, outcome };
 }
 
+/* ─────────────────────────── Module 4 — LMS ─────────────────────── */
+
+const MAX_BODY = 20000;
+
+export interface CreateAssignmentInput {
+  classId: string;
+  title: string;
+  description?: string;
+  dueDate?: string; // ISO datetime
+  maxPoints: number;
+}
+
+/** Validate the POST /api/assignments body. */
+export function parseCreateAssignment(body: unknown): CreateAssignmentInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.classId)) fields.classId = "classId must be a UUID";
+
+  const title = typeof b.title === "string" ? b.title.trim() : "";
+  if (title.length < 1 || title.length > 255)
+    fields.title = "title required (1-255 chars)";
+
+  let description: string | undefined;
+  if (b.description !== undefined) {
+    if (typeof b.description !== "string" || b.description.length > MAX_BODY)
+      fields.description = `description must be a string (<=${MAX_BODY} chars)`;
+    else description = b.description;
+  }
+
+  let dueDate: string | undefined;
+  if (b.dueDate !== undefined && b.dueDate !== null && b.dueDate !== "") {
+    if (typeof b.dueDate !== "string" || Number.isNaN(Date.parse(b.dueDate)))
+      fields.dueDate = "dueDate must be an ISO date/datetime";
+    else dueDate = b.dueDate;
+  }
+
+  let maxPoints = 100;
+  if (b.maxPoints !== undefined) {
+    if (
+      typeof b.maxPoints !== "number" ||
+      !Number.isInteger(b.maxPoints) ||
+      b.maxPoints < 1 ||
+      b.maxPoints > 1000
+    )
+      fields.maxPoints = "maxPoints must be an integer 1-1000";
+    else maxPoints = b.maxPoints;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { classId: b.classId as string, title, description, dueDate, maxPoints };
+}
+
+export const ASSIGNMENT_STATUS_TARGETS = ["published", "closed", "draft"] as const;
+export type AssignmentStatusTarget =
+  (typeof ASSIGNMENT_STATUS_TARGETS)[number];
+
+export interface AssignmentStatusInput {
+  status: AssignmentStatusTarget;
+}
+
+/** Validate the POST /api/assignments/[id]/status body. */
+export function parseAssignmentStatus(body: unknown): AssignmentStatusInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  const status = typeof b.status === "string" ? b.status : "";
+  if (!ASSIGNMENT_STATUS_TARGETS.includes(status as AssignmentStatusTarget))
+    fields.status = `status must be one of ${ASSIGNMENT_STATUS_TARGETS.join(", ")}`;
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { status: status as AssignmentStatusTarget };
+}
+
+export interface CreateSubmissionInput {
+  assignmentId: string;
+}
+
+/** Validate the POST /api/submissions body. */
+export function parseCreateSubmission(body: unknown): CreateSubmissionInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+  if (!isUuid(b.assignmentId))
+    fields.assignmentId = "assignmentId must be a UUID";
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+  return { assignmentId: b.assignmentId as string };
+}
+
+export interface GradeSubmissionInput {
+  pointsAwarded: number;
+  feedback?: string;
+}
+
+/** Validate the POST /api/submissions/[id]/grade body. (Cap vs maxPoints is the service's job.) */
+export function parseGradeSubmission(body: unknown): GradeSubmissionInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (
+    typeof b.pointsAwarded !== "number" ||
+    !Number.isInteger(b.pointsAwarded) ||
+    b.pointsAwarded < 0
+  )
+    fields.pointsAwarded = "pointsAwarded must be a non-negative integer";
+
+  let feedback: string | undefined;
+  if (b.feedback !== undefined) {
+    if (typeof b.feedback !== "string" || b.feedback.length > MAX_BODY)
+      fields.feedback = `feedback must be a string (<=${MAX_BODY} chars)`;
+    else feedback = b.feedback;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { pointsAwarded: b.pointsAwarded as number, feedback };
+}
+
+export interface RegisterFileInput {
+  fileName: string;
+  url: string;
+  storageKey: string;
+  contentType?: string;
+  sizeBytes?: number;
+}
+
+/** Validate a submission-file metadata record (the dev/explicit register path). */
+export function parseRegisterFile(body: unknown): RegisterFileInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  const fileName = typeof b.fileName === "string" ? b.fileName.trim() : "";
+  if (fileName.length < 1 || fileName.length > 512)
+    fields.fileName = "fileName required (1-512 chars)";
+
+  const url = typeof b.url === "string" ? b.url.trim() : "";
+  if (url.length < 1 || url.length > 2048) fields.url = "url required";
+
+  const storageKey =
+    typeof b.storageKey === "string" ? b.storageKey.trim() : "";
+  if (storageKey.length < 1 || storageKey.length > 1024)
+    fields.storageKey = "storageKey required";
+
+  let contentType: string | undefined;
+  if (b.contentType !== undefined) {
+    if (typeof b.contentType !== "string" || b.contentType.length > 128)
+      fields.contentType = "contentType must be a string (<=128 chars)";
+    else contentType = b.contentType;
+  }
+
+  let sizeBytes: number | undefined;
+  if (b.sizeBytes !== undefined) {
+    if (
+      typeof b.sizeBytes !== "number" ||
+      !Number.isInteger(b.sizeBytes) ||
+      b.sizeBytes < 0
+    )
+      fields.sizeBytes = "sizeBytes must be a non-negative integer";
+    else sizeBytes = b.sizeBytes;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { fileName, url, storageKey, contentType, sizeBytes };
+}
+
+export interface CreateThreadInput {
+  classId: string;
+  assignmentId?: string;
+  title: string;
+  body: string;
+}
+
+/** Validate the POST /api/discussions/threads body. */
+export function parseCreateThread(body: unknown): CreateThreadInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.classId)) fields.classId = "classId must be a UUID";
+
+  let assignmentId: string | undefined;
+  if (b.assignmentId !== undefined && b.assignmentId !== null) {
+    if (!isUuid(b.assignmentId))
+      fields.assignmentId = "assignmentId must be a UUID";
+    else assignmentId = b.assignmentId as string;
+  }
+
+  const title = typeof b.title === "string" ? b.title.trim() : "";
+  if (title.length < 1 || title.length > 255)
+    fields.title = "title required (1-255 chars)";
+
+  const text = typeof b.body === "string" ? b.body.trim() : "";
+  if (text.length < 1 || text.length > MAX_BODY)
+    fields.body = `body required (1-${MAX_BODY} chars)`;
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { classId: b.classId as string, assignmentId, title, body: text };
+}
+
+export interface CreatePostInput {
+  body: string;
+  parentPostId?: string;
+}
+
+/** Validate the POST /api/discussions/threads/[id]/posts body. */
+export function parseCreatePost(body: unknown): CreatePostInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  const text = typeof b.body === "string" ? b.body.trim() : "";
+  if (text.length < 1 || text.length > MAX_BODY)
+    fields.body = `body required (1-${MAX_BODY} chars)`;
+
+  let parentPostId: string | undefined;
+  if (b.parentPostId !== undefined && b.parentPostId !== null) {
+    if (!isUuid(b.parentPostId))
+      fields.parentPostId = "parentPostId must be a UUID";
+    else parentPostId = b.parentPostId as string;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { body: text, parentPostId };
+}
+
 export interface CreateOrganizationInput {
   name: string;
 }

@@ -43,6 +43,13 @@
       "when": 1781342364053,
       "tag": "0005_sis_progression",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781359561906,
+      "tag": "0006_lms_module",
+      "breakpoints": true
     }
   ]
 }

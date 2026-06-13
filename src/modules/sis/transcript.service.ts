@@ -64,7 +64,7 @@ export interface Transcript {
  * Returns null if the user has no student profile.
  */
 export async function getStudentProfileIdByUser(
-  db: DB,
+  db: Pick<DB, "select">,
   userId: string,
 ): Promise<string | null> {
   const [row] = await db
