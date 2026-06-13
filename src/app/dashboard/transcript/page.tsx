@@ -2,11 +2,13 @@
 
 /** My Transcript — a student's own enrollments + transcript (self-service). */
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { RoleGuard } from "../_components/RoleGuard";
 import { TranscriptCard } from "../_components/forms";
 import { Section, dim, type TranscriptData } from "../_components/ui";
 
 interface MyEnrollment {
+  classId: string;
   classSubject: string;
   term: string;
   credits: number;
@@ -51,8 +53,10 @@ export default function TranscriptPage() {
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
                 {enr.map((e, i) => (
                   <li key={i}>
-                    {e.classSubject} ({e.credits} cr · {e.term}) —{" "}
-                    {e.finalGrade ?? "ungraded"}{" "}
+                    <Link href={`/dashboard/classroom/${e.classId}`} style={{ color: "#7fb0ff" }}>
+                      {e.classSubject}
+                    </Link>{" "}
+                    ({e.credits} cr · {e.term}) — {e.finalGrade ?? "ungraded"}{" "}
                     <span style={{ opacity: 0.5 }}>[{e.status}]</span>
                   </li>
                 ))}

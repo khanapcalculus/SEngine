@@ -2,6 +2,7 @@
 
 /** My Classes — a teacher's assigned classes + a gradebook limited to them. */
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { RoleGuard } from "../_components/RoleGuard";
 import { Gradebook } from "../_components/forms";
 import { Section, dim, successStyle, type EnrollmentRow } from "../_components/ui";
@@ -57,7 +58,9 @@ export default function MyClassesPage() {
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
             {classes.map((c) => (
               <li key={c.classId}>
-                {c.subject}{" "}
+                <Link href={`/dashboard/classroom/${c.classId}`} style={{ color: "#7fb0ff" }}>
+                  {c.subject}
+                </Link>{" "}
                 <span style={{ opacity: 0.6 }}>
                   ({c.term} · {c.credits} cr · {c.role})
                 </span>

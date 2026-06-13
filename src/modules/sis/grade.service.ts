@@ -189,6 +189,7 @@ export async function listGradebookForStaffUser(
 }
 
 export interface StudentEnrollmentRow {
+  classId: string;
   classSubject: string;
   term: string;
   credits: number;
@@ -206,6 +207,7 @@ export async function listEnrollmentsForStudentUser(
 ): Promise<StudentEnrollmentRow[]> {
   return db
     .select({
+      classId: classes.id,
       classSubject: classes.subject,
       term: classes.term,
       credits: classes.credits,
