@@ -15,13 +15,25 @@ import {
   useMemo,
   useRef,
   useState,
+  type FormEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { RoleGuard } from "../_components/RoleGuard";
 import { useDashboard } from "../DashboardProvider";
-import { Section, StatusBadge, dim, inp, btn, miniBtn, labelStyle } from "../_components/ui";
+import {
+  Section,
+  StatusBadge,
+  dim,
+  inp,
+  btn,
+  miniBtn,
+  labelStyle,
+  errStyle,
+  formGrid,
+  fmtErr,
+} from "../_components/ui";
 import { useWhiteboardSocket } from "./useWhiteboardSocket";
-import type { ConnectionStatus } from "./connection";
+import type { ConnectionStatus, WhiteboardOp } from "./connection";
 
 interface ClassOption {
   id: string;
@@ -175,8 +187,13 @@ function Board({ classId }: { classId: string }) {
   const W = 720;
   const H = 380;
 
+  // AI derivation is educator-only (mirrors the route's RBAC). On the
+  // whiteboard that means a teacher; students connect view/collaborate only.
+  const canUseAi = role !== null && role !== "student" && role !== "parent";
+
   return (
-    <Section title="Canvas">
+    <>
+      <Section title="Canvas">
       <div
         style={{
           display: "flex",
@@ -257,6 +274,126 @@ function Board({ classId }: { classId: string }) {
           ? "Click to place a point; move your pointer to share your cursor."
           : "You are connected in view-only mode."}
       </p>
+      </Section>
+
+      {canUseAi && <DerivationPanel classId={classId} ops={ops} />}
+    </>
+  );
+}
+
+/**
+ * Educator-only AI derivation: summarise the live board, let the educator
+ * transcribe the math shown, and POST it to /api/me/ai/derivation. The board
+ * summary travels as part of the context so the model knows what's on the
+ * canvas; the transcription carries the actual math (no OCR yet).
+ */
+function DerivationPanel({
+  classId,
+  ops,
+}: {
+  classId: string;
+  ops: WhiteboardOp[];
+}) {
+  const [context, setContext] = useState("");
+  const [focus, setFocus] = useState("");
+  const [result, setResult] = useState<{
+    derivation: string;
+    model: string;
+  } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const boardSummary = useMemo(() => {
+    const count = (t: string) => ops.filter((o) => o.type === t).length;
+    const strokes = count("stroke");
+    const shapes = count("shape");
+    const equations = count("equation");
+    const bits = [`${strokes} stroke${strokes === 1 ? "" : "s"}`];
+    if (shapes) bits.push(`${shapes} shape${shapes === 1 ? "" : "s"}`);
+    if (equations) bits.push(`${equations} equation${equations === 1 ? "" : "s"}`);
+    return `Board snapshot: ${bits.join(", ")}.`;
+  }, [ops]);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!context.trim()) {
+      setErr("Transcribe the problem on the board first.");
+      return;
+    }
+    setErr(null);
+    setBusy(true);
+    setResult(null);
+    try {
+      const whiteboardContext = `${boardSummary}\n\nProblem on the board (transcribed by the educator):\n${context.trim()}`;
+      const res = await fetch("/api/me/ai/derivation", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          classId,
+          whiteboardContext,
+          prompt: focus.trim() || undefined,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) return setErr(fmtErr(d) + " (is GEMMA_API_KEY configured?)");
+      setResult({ derivation: d.derivation, model: d.model });
+    } catch {
+      setErr("An unexpected error occurred. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Section title="AI derivation (Gemma)">
+      <p style={{ ...dim, marginTop: 0 }}>
+        {boardSummary} Transcribe the math shown and Gemma will derive it
+        step by step.
+      </p>
+      <form onSubmit={submit} style={{ ...formGrid, maxWidth: 560 }}>
+        <textarea
+          style={{ ...inp, minHeight: 72, fontFamily: "inherit" }}
+          placeholder="Problem on the board, e.g. Find the determinant of [[2,1],[1,3]]"
+          value={context}
+          onChange={(e) => setContext(e.target.value)}
+        />
+        <input
+          style={inp}
+          placeholder="Optional focus (e.g. just the cofactor expansion)"
+          value={focus}
+          onChange={(e) => setFocus(e.target.value)}
+        />
+        {err && (
+          <p role="alert" style={errStyle}>
+            {err}
+          </p>
+        )}
+        <button
+          type="submit"
+          disabled={busy || !context.trim()}
+          style={btn(busy || !context.trim())}
+        >
+          {busy ? "Asking Gemma…" : "Ask for derivation"}
+        </button>
+        {result && (
+          <div>
+            <p style={{ ...dim, margin: "4px 0" }}>Model: {result.model}</p>
+            <pre
+              style={{
+                whiteSpace: "pre-wrap",
+                background: "#11162a",
+                padding: 12,
+                borderRadius: 8,
+                fontSize: 12,
+                lineHeight: 1.5,
+                margin: 0,
+              }}
+            >
+              {result.derivation}
+            </pre>
+          </div>
+        )}
+      </form>
     </Section>
   );
 }
