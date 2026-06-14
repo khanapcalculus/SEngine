@@ -9,9 +9,26 @@
  *  - timingSafeEqual for comparing secrets without leaking length/position.
  */
 
-const subtle = globalThis.crypto.subtle;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+/**
+ * WebCrypto SubtleCrypto, resolved lazily on first use.
+ *
+ * MUST NOT be read at module scope: on the Cloudflare Workers runtime the
+ * `crypto` global is only guaranteed inside a request context, so touching
+ * `globalThis.crypto.subtle` during top-level module evaluation throws and
+ * crashes the whole Worker on load (Cloudflare error 1101). Every crypto call
+ * below happens within a request, where the global is always present (Node 18+
+ * exposes it at module scope too, so this is a no-op there).
+ */
+function subtleCrypto(): SubtleCrypto {
+  const c = globalThis.crypto;
+  if (!c?.subtle) {
+    throw new Error("WebCrypto SubtleCrypto is unavailable in this runtime");
+  }
+  return c.subtle;
+}
 
 /**
  * TS 6 types typed-array buffers as `ArrayBufferLike` (which includes
@@ -70,6 +87,7 @@ async function pbkdf2(
   salt: Uint8Array,
   iterations: number,
 ): Promise<Uint8Array> {
+  const subtle = subtleCrypto();
   const keyMaterial = await subtle.importKey(
     "raw",
     bs(encoder.encode(password)),
@@ -116,7 +134,7 @@ export async function verifyPassword(
 /* ───────────────────────── HMAC (JWT) ──────────────────────────── */
 
 async function hmacKey(secret: string): Promise<CryptoKey> {
-  return subtle.importKey(
+  return subtleCrypto().importKey(
     "raw",
     bs(encoder.encode(secret)),
     { name: "HMAC", hash: "SHA-256" },
@@ -130,7 +148,7 @@ export async function hmacSign(
   secret: string,
 ): Promise<Uint8Array> {
   const key = await hmacKey(secret);
-  const sig = await subtle.sign("HMAC", key, bs(encoder.encode(data)));
+  const sig = await subtleCrypto().sign("HMAC", key, bs(encoder.encode(data)));
   return new Uint8Array(sig);
 }
 
