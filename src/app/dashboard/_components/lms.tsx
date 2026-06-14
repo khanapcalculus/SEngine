@@ -22,6 +22,7 @@ import {
   tenantCard,
   successStyle,
 } from "./ui";
+import { MathText } from "./MathText";
 
 interface Assignment {
   id: string;
@@ -470,7 +471,9 @@ function ThreadView({ threadId }: { threadId: string }) {
             <li key={p.id} style={{ padding: "6px 0", borderTop: "1px solid rgba(255,255,255,0.07)", paddingLeft: p.parentPostId ? 16 : 0 }}>
               <span style={{ fontWeight: 600 }}>{p.authorName ?? "Someone"}</span>{" "}
               <span style={{ opacity: 0.4 }}>{new Date(p.createdAt).toLocaleString()}</span>
-              <div>{p.body}</div>
+              <div style={{ marginTop: 2 }}>
+                <MathText text={p.body} />
+              </div>
             </li>
           ))}
         </ul>

@@ -1,13 +1,17 @@
 "use client";
 
 /**
- * Renders Gemma's derivation text with real math: prose verbatim, `$...$` and
- * `$$...$$` via KaTeX. Segmentation is the pure parseMathSegments; this module
- * adds the client-only concerns (KaTeX + its stylesheet, dangerouslySetInnerHTML
- * for the rendered HTML).
+ * Renders text with real math: prose verbatim, `$...$` and `$$...$$` via KaTeX.
+ * Shared by the whiteboard derivation panel and the discussion post renderer,
+ * so any saved derivation (or a student's `$x^2$`) shows as typeset math.
+ * Segmentation is the pure parseMathSegments; this module adds the client-only
+ * concerns (KaTeX + its stylesheet, dangerouslySetInnerHTML for the HTML).
+ *
+ * Style-neutral by design — the caller supplies any surrounding chrome (the
+ * derivation panel wraps it in a box; discussion posts render it inline).
  *
  * KaTeX runs with throwOnError:false so a malformed expression renders in the
- * error colour inline instead of blowing up the whole panel.
+ * error colour inline instead of blowing up the surrounding view.
  */
 import { useMemo } from "react";
 import katex from "katex";
@@ -31,16 +35,7 @@ export function MathText({ text }: { text: string }) {
   const segments = useMemo(() => parseMathSegments(text), [text]);
 
   return (
-    <div
-      style={{
-        background: "#11162a",
-        padding: 12,
-        borderRadius: 8,
-        fontSize: 13,
-        lineHeight: 1.6,
-        overflowX: "auto",
-      }}
-    >
+    <div style={{ lineHeight: 1.6, overflowX: "auto" }}>
       {segments.map((seg, i) => {
         if (seg.type === "text") {
           // Preserve the newlines/indentation of the numbered steps.
