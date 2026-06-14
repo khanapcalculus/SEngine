@@ -34,6 +34,7 @@ import {
 } from "../_components/ui";
 import { useWhiteboardSocket } from "./useWhiteboardSocket";
 import type { ConnectionStatus, WhiteboardOp } from "./connection";
+import { MathText } from "./MathText";
 
 interface ClassOption {
   id: string;
@@ -378,19 +379,7 @@ function DerivationPanel({
         {result && (
           <div>
             <p style={{ ...dim, margin: "4px 0" }}>Model: {result.model}</p>
-            <pre
-              style={{
-                whiteSpace: "pre-wrap",
-                background: "#11162a",
-                padding: 12,
-                borderRadius: 8,
-                fontSize: 12,
-                lineHeight: 1.5,
-                margin: 0,
-              }}
-            >
-              {result.derivation}
-            </pre>
+            <MathText text={result.derivation} />
           </div>
         )}
       </form>
