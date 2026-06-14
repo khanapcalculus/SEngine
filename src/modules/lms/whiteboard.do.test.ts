@@ -14,11 +14,19 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 class FakeWS {
   sent: string[] = [];
   closed = false;
+  attachment: unknown = null;
   send(data: string) {
     this.sent.push(data);
   }
   close() {
     this.closed = true;
+  }
+  // Hibernation attachment API used by the DO to persist connection identity.
+  serializeAttachment(value: unknown) {
+    this.attachment = value;
+  }
+  deserializeAttachment() {
+    return this.attachment;
   }
 }
 
@@ -70,8 +78,11 @@ function makeState() {
   };
 }
 
-function upgradeReq(): Request {
-  return new Request("http://do/", { headers: { Upgrade: "websocket" } });
+function upgradeReq(userId?: string): Request {
+  const headers: Record<string, string> = { Upgrade: "websocket" };
+  // Mirrors the verified identity the fronting Worker forwards to the DO.
+  if (userId) headers["x-rtc-user-id"] = userId;
+  return new Request("http://do/", { headers });
 }
 
 let state: ReturnType<typeof makeState>;
@@ -180,5 +191,87 @@ describe("WhiteboardRoom.webSocketMessage", () => {
     await room.fetch(upgradeReq());
     const joiner = state.sockets[2];
     expect(joiner.sent.find((m) => m.includes('"history"'))).toBeUndefined();
+  });
+});
+
+describe("WhiteboardRoom sender attribution", () => {
+  it("stamps senderId from the connection's verified identity", async () => {
+    await room.fetch(upgradeReq("user-ada"));
+    await room.fetch(upgradeReq("user-grace"));
+    const [ada, grace] = state.sockets;
+
+    await room.webSocketMessage(
+      ada as any,
+      JSON.stringify({ type: "stroke", payload: { x: 1 } }),
+    );
+    const received: WhiteboardOp = JSON.parse(
+      grace.sent.find((m) => m.includes('"stroke"'))!,
+    );
+    // senderId came from the server-side attachment, not the client payload.
+    expect(received.senderId).toBe("user-ada");
+  });
+
+  it("attributes cursor ops so peers are distinguishable", async () => {
+    await room.fetch(upgradeReq("user-ada"));
+    await room.fetch(upgradeReq("user-grace"));
+    const [ada, grace] = state.sockets;
+
+    await room.webSocketMessage(
+      ada as any,
+      JSON.stringify({ type: "cursor", payload: { x: 0.5, y: 0.5 } }),
+    );
+    const cursor: WhiteboardOp = JSON.parse(
+      grace.sent.find((m) => m.includes('"cursor"'))!,
+    );
+    expect(cursor.senderId).toBe("user-ada");
+  });
+
+  it("overrides any client-supplied senderId (never trusts the client)", async () => {
+    await room.fetch(upgradeReq("user-ada"));
+    await room.fetch(upgradeReq("user-grace"));
+    const [ada, grace] = state.sockets;
+
+    await room.webSocketMessage(
+      ada as any,
+      JSON.stringify({
+        type: "stroke",
+        payload: {},
+        senderId: "user-impersonated",
+      }),
+    );
+    const received: WhiteboardOp = JSON.parse(
+      grace.sent.find((m) => m.includes('"stroke"'))!,
+    );
+    expect(received.senderId).toBe("user-ada");
+  });
+
+  it("replays history with senderId intact for late joiners", async () => {
+    await room.fetch(upgradeReq("user-ada"));
+    const [ada] = state.sockets;
+    await room.webSocketMessage(
+      ada as any,
+      JSON.stringify({ type: "stroke", payload: { x: 1 } }),
+    );
+
+    await room.fetch(upgradeReq("user-late"));
+    const joiner = state.sockets[1];
+    const frame = JSON.parse(
+      joiner.sent.find((m) => m.includes('"history"'))!,
+    );
+    expect(frame.ops[0].senderId).toBe("user-ada");
+  });
+
+  it("leaves senderId undefined when no identity header was forwarded", async () => {
+    await room.fetch(upgradeReq()); // no x-rtc-user-id
+    await room.fetch(upgradeReq());
+    const [a, b] = state.sockets;
+    await room.webSocketMessage(
+      a as any,
+      JSON.stringify({ type: "stroke", payload: {} }),
+    );
+    const received: WhiteboardOp = JSON.parse(
+      b.sent.find((m) => m.includes('"stroke"'))!,
+    );
+    expect(received.senderId).toBeUndefined();
   });
 });
