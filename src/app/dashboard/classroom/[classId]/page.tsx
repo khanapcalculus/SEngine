@@ -26,12 +26,41 @@ export default function ClassroomPage() {
   const canManage = isManager(me.role) || me.role === "teacher";
   const isStudent = me.role === "student";
 
+  // Launch the live whiteboard in its own pop-out window (chromeless /board
+  // route). A named window means re-clicking focuses the existing board for
+  // this class instead of spawning duplicates.
+  function openWhiteboard() {
+    if (!classId) return;
+    window.open(
+      `/board/${classId}`,
+      `sengine-board-${classId}`,
+      "popup,noopener,width=1280,height=800",
+    );
+  }
+
   return (
     <RoleGuard allow={MEMBERS}>
       <h1 style={{ fontSize: 22, margin: "0 0 4px" }}>Classroom</h1>
       <p style={dim}>Class {classId.slice(0, 8)}…</p>
       {classId ? (
         <>
+          <button
+            type="button"
+            onClick={openWhiteboard}
+            style={{
+              margin: "4px 0 16px",
+              padding: "9px 16px",
+              fontSize: 14,
+              fontWeight: 600,
+              color: "#fff",
+              background: "#5570ff",
+              border: "none",
+              borderRadius: 8,
+              cursor: "pointer",
+            }}
+          >
+            🎨 Open Live Whiteboard ↗
+          </button>
           <AssignmentsPanel
             classId={classId}
             canManage={canManage}

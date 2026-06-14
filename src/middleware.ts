@@ -1,9 +1,14 @@
 /**
- * Edge middleware — first line of defense for /dashboard/* (Guideline #4).
+ * Edge middleware — first line of defense for /dashboard/* and /board/*
+ * (Guideline #4).
  *
- * Verifies the session JWT at the edge BEFORE any dashboard page renders:
+ * Verifies the session JWT at the edge BEFORE any protected page renders:
  *  - no/invalid/expired cookie  -> redirect to /login
  *  - valid cookie, wrong role for the path -> redirect to /dashboard (their home)
+ *
+ * The /board/* pop-out whiteboard has no NAV_ITEM, so navItemForPath returns
+ * undefined and only the authentication check applies — actual class membership
+ * is enforced downstream when /api/me/classroom/token mints the RTC handshake.
  *
  * This is defense-in-depth on top of the client <RoleGuard> (which renders the
  * 403 UI) and the API `requireRole` guards (the real enforcement). It uses only
@@ -17,7 +22,7 @@ import { canAccess, navItemForPath } from "./lib/rbac";
 // Mirrors SESSION_COOKIE in lib/auth.ts (inlined to keep drizzle out of edge).
 const SESSION_COOKIE = "sengine_session";
 
-export const config = { matcher: ["/dashboard/:path*"] };
+export const config = { matcher: ["/dashboard/:path*", "/board/:path*"] };
 
 export async function middleware(req: NextRequest): Promise<NextResponse> {
   const loginUrl = new URL("/login", req.url);
