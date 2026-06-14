@@ -163,6 +163,67 @@ describe("inbound frames", () => {
   });
 });
 
+describe("erase (object eraser)", () => {
+  async function openConn(over?: Partial<ConnectionDeps>) {
+    const conn = new WhiteboardConnection("c1", makeDeps(over));
+    await conn.connect();
+    socket.emitOpen();
+    return conn;
+  }
+
+  it("a live erase tombstones the target id without touching ops", async () => {
+    const conn = await openConn();
+    socket.emitMessage({ type: "stroke", payload: { id: "A" } });
+    socket.emitMessage({ type: "erase", payload: { targetId: "A" } });
+    // The create stays in the op log; the renderer skips it via `erased`.
+    expect(conn.getState().ops).toHaveLength(1);
+    expect(conn.getState().erased.has("A")).toBe(true);
+  });
+
+  it("seeds erased from history in order (create A, create B, erase A)", async () => {
+    const conn = await openConn();
+    socket.emitMessage({
+      type: "history",
+      ops: [
+        { type: "stroke", payload: { id: "A" } },
+        { type: "shape", payload: { id: "B" } },
+        { type: "erase", payload: { targetId: "A" } },
+      ],
+    });
+    expect(conn.getState().ops.map((o) => o.payload)).toEqual([{ id: "A" }, { id: "B" }]);
+    expect([...conn.getState().erased]).toEqual(["A"]);
+  });
+
+  it("an orphan erase (unknown target) is harmless", async () => {
+    const conn = await openConn();
+    socket.emitMessage({ type: "erase", payload: { targetId: "ghost" } });
+    expect(conn.getState().ops).toHaveLength(0);
+    expect(conn.getState().erased.has("ghost")).toBe(true);
+  });
+
+  it("clear resets the erased set", async () => {
+    const conn = await openConn();
+    socket.emitMessage({ type: "erase", payload: { targetId: "A" } });
+    socket.emitMessage({ type: "clear" });
+    expect(conn.getState().erased.size).toBe(0);
+  });
+
+  it("sendOp(erase) sends + echoes the tombstone when canDraw", async () => {
+    const conn = await openConn();
+    expect(conn.sendOp({ type: "erase", payload: { targetId: "Z" } })).toBe(true);
+    expect(JSON.parse(socket.sent[0])).toMatchObject({ type: "erase", payload: { targetId: "Z" } });
+    expect(conn.getState().erased.has("Z")).toBe(true);
+  });
+
+  it("sendOp(erase) is blocked for a view-only peer", async () => {
+    const conn = await openConn({
+      fetchToken: vi.fn(async () => ({ ...TOKEN, canDraw: false })),
+    });
+    expect(conn.sendOp({ type: "erase", payload: { targetId: "Q" } })).toBe(false);
+    expect(conn.getState().erased.has("Q")).toBe(false);
+  });
+});
+
 describe("sendOp", () => {
   async function openConn(over?: Partial<ConnectionDeps>) {
     const conn = new WhiteboardConnection("c1", makeDeps(over));

@@ -11,6 +11,7 @@ import {
   asStroke,
   isFarEnough,
   packStrokePayload,
+  buildSmoothPath,
   DEFAULT_COLOR,
   DEFAULT_WIDTH,
   MIN_POINT_DELTA,
@@ -165,5 +166,65 @@ describe("packStrokePayload — wire packing", () => {
     ];
     const packed = packStrokePayload(points, "#00ff88", 3);
     expect(asStroke(packed)).toEqual(packed);
+  });
+
+  it("includes id only when provided, and round-trips it through asStroke", () => {
+    const points = [{ x: 0.1, y: 0.1 }];
+    expect(packStrokePayload(points, "#fff", 2)).not.toHaveProperty("id");
+    const withId = packStrokePayload(points, "#fff", 2, "abc-123");
+    expect(withId.id).toBe("abc-123");
+    expect(asStroke(withId)?.id).toBe("abc-123");
+  });
+
+  it("narrows a legacy payload with no id (id stays undefined)", () => {
+    const s = asStroke({ points: [{ x: 0, y: 0 }], color: "#fff", width: 2 });
+    expect(s?.id).toBeUndefined();
+  });
+});
+
+describe("buildSmoothPath — smooth pen rendering", () => {
+  it("returns an empty string for 0 or 1 points (page draws a dot instead)", () => {
+    expect(buildSmoothPath([], 100, 100)).toBe("");
+    expect(buildSmoothPath([{ x: 0.5, y: 0.5 }], 100, 100)).toBe("");
+  });
+
+  it("draws a straight line for exactly two points, scaled to pixels", () => {
+    const d = buildSmoothPath(
+      [
+        { x: 0, y: 0 },
+        { x: 1, y: 1 },
+      ],
+      200,
+      100,
+    );
+    expect(d).toBe("M 0 0 L 200 100");
+  });
+
+  it("emits a quadratic chain for 3+ points and lands on the last point", () => {
+    const d = buildSmoothPath(
+      [
+        { x: 0, y: 0 },
+        { x: 0.5, y: 1 },
+        { x: 1, y: 0 },
+      ],
+      100,
+      100,
+    );
+    expect(d.startsWith("M 0 0")).toBe(true);
+    expect(d).toContain("Q"); // smoothed control segment
+    expect(d.endsWith("L 100 0")).toBe(true); // exact final point
+  });
+
+  it("scales normalized coordinates by the surface size", () => {
+    const d = buildSmoothPath(
+      [
+        { x: 0.25, y: 0.5 },
+        { x: 0.75, y: 0.5 },
+      ],
+      400,
+      200,
+    );
+    // 0.25*400=100, 0.5*200=100 ; 0.75*400=300
+    expect(d).toBe("M 100 100 L 300 100");
   });
 });

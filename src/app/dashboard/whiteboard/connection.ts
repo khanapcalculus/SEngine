@@ -20,7 +20,8 @@ export type WhiteboardOpType =
   | "shape"
   | "equation"
   | "clear"
-  | "cursor";
+  | "cursor"
+  | "erase";
 
 export interface WhiteboardOp {
   type: WhiteboardOpType;
@@ -58,6 +59,13 @@ export interface WhiteboardState {
   ops: WhiteboardOp[];
   /** Latest cursor op per sender (ephemeral presence). */
   cursors: Record<string, WhiteboardOp>;
+  /**
+   * Ids tombstoned by an `erase` op. Kept as a set rather than splicing `ops`
+   * so the object eraser is idempotent and survives history replay: a create
+   * always precedes its erase in the op log, so re-seeding re-derives the same
+   * state. Renderers skip any op whose id is in this set.
+   */
+  erased: Set<string>;
 }
 
 /** Minimal structural WebSocket so tests can inject a fake. */
@@ -123,7 +131,17 @@ function initialState(): WhiteboardState {
     error: null,
     ops: [],
     cursors: {},
+    erased: new Set<string>(),
   };
+}
+
+/** Read the `targetId` an `erase` op points at (payload-light; null if absent). */
+function eraseTargetId(payload: unknown): string | null {
+  if (payload && typeof payload === "object") {
+    const t = (payload as { targetId?: unknown }).targetId;
+    if (typeof t === "string") return t;
+  }
+  return null;
 }
 
 export class WhiteboardConnection {
@@ -223,10 +241,19 @@ export class WhiteboardConnection {
     if (!msg || typeof msg.type !== "string") return;
 
     if (msg.type === "history" && Array.isArray(msg.ops)) {
-      const seeded = msg.ops
-        .filter((o) => PERSISTENT.has(o.type))
-        .slice(-MAX_OPS);
-      this.setState({ ops: seeded });
+      // Reduce the log in receive order: creates seed `ops`, erases tombstone
+      // their target. A create always precedes its erase, so this re-derives the
+      // exact live state on every (re)connect.
+      const seeded: WhiteboardOp[] = [];
+      const erased = new Set<string>();
+      for (const o of msg.ops) {
+        if (PERSISTENT.has(o.type)) seeded.push(o);
+        else if (o.type === "erase") {
+          const t = eraseTargetId(o.payload);
+          if (t) erased.add(t);
+        }
+      }
+      this.setState({ ops: seeded.slice(-MAX_OPS), erased });
       return;
     }
     if (msg.type === "error") {
@@ -234,7 +261,12 @@ export class WhiteboardConnection {
       return;
     }
     if (msg.type === "clear") {
-      this.setState({ ops: [], cursors: {} });
+      this.setState({ ops: [], cursors: {}, erased: new Set<string>() });
+      return;
+    }
+    if (msg.type === "erase") {
+      const t = eraseTargetId(msg.payload);
+      if (t) this.setState({ erased: new Set([...this.state.erased, t]) });
       return;
     }
     if (msg.type === "cursor") {
@@ -281,8 +313,14 @@ export class WhiteboardConnection {
 
     // Local echo (the DO broadcasts only to OTHER peers).
     const stamped: WhiteboardOp = { ...op, ts: this.deps.now() };
-    if (op.type === "clear") this.setState({ ops: [], cursors: {} });
-    else if (PERSISTENT.has(op.type)) this.appendOp(stamped);
+    if (op.type === "clear") {
+      this.setState({ ops: [], cursors: {}, erased: new Set<string>() });
+    } else if (op.type === "erase") {
+      const t = eraseTargetId(op.payload);
+      if (t) this.setState({ erased: new Set([...this.state.erased, t]) });
+    } else if (PERSISTENT.has(op.type)) {
+      this.appendOp(stamped);
+    }
     return true;
   }
 

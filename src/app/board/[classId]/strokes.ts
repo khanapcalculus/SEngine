@@ -16,6 +16,8 @@ export interface Pt {
 
 /** What we pack into the opaque `stroke` op payload. */
 export interface StrokePayload {
+  /** Stable id minted at creation; lets the object eraser target this stroke. */
+  id?: string;
   points: Pt[];
   color: string;
   width: number;
@@ -54,6 +56,7 @@ export function asStroke(payload: unknown): StrokePayload | null {
     const points = p.points.filter(isPt);
     if (points.length === 0) return null;
     return {
+      id: typeof p.id === "string" ? p.id : undefined,
       points,
       color: typeof p.color === "string" ? p.color : DEFAULT_COLOR,
       width: typeof p.width === "number" ? p.width : DEFAULT_WIDTH,
@@ -92,6 +95,48 @@ export function packStrokePayload(
   points: Pt[],
   color: string,
   width: number,
+  id?: string,
 ): StrokePayload {
-  return { points, color, width };
+  return id ? { id, points, color, width } : { points, color, width };
+}
+
+/**
+ * Build an SVG `<path>` `d` string that draws a SMOOTH curve through `points`
+ * (normalized 0..1), scaled to a `w`×`h` pixel surface. This replaces the old
+ * straight-segment `<polyline>`, which is why the pen looked faceted.
+ *
+ * Technique: quadratic Bézier through midpoints — the freehand-drawing standard.
+ * We move to the first point, then for each interior point `pi` emit
+ * `Q pi, midpoint(pi, pi+1)`, so every recorded point becomes a control point and
+ * the curve passes smoothly through the midpoints (C1-continuous, no overshoot).
+ * A final `L` lands the curve exactly on the last recorded point.
+ *
+ * Pure and DOM-free: takes the pixel size explicitly so it's unit-testable.
+ *   - 0 or 1 points → "" (the caller renders a dot for the single-point case)
+ *   - 2 points      → a straight line
+ *   - 3+ points     → the smoothed quadratic chain
+ */
+export function buildSmoothPath(points: Pt[], w: number, h: number): string {
+  if (points.length < 2) return "";
+  const X = (p: Pt) => p.x * w;
+  const Y = (p: Pt) => p.y * h;
+  const n = points.length;
+
+  if (n === 2) {
+    return `M ${X(points[0])} ${Y(points[0])} L ${X(points[1])} ${Y(points[1])}`;
+  }
+
+  let d = `M ${X(points[0])} ${Y(points[0])}`;
+  // Each interior point is a control point; the curve passes through the
+  // midpoint between consecutive points.
+  for (let i = 1; i < n - 1; i++) {
+    const cx = X(points[i]);
+    const cy = Y(points[i]);
+    const mx = (X(points[i]) + X(points[i + 1])) / 2;
+    const my = (Y(points[i]) + Y(points[i + 1])) / 2;
+    d += ` Q ${cx} ${cy} ${mx} ${my}`;
+  }
+  // Finish exactly on the last point.
+  d += ` L ${X(points[n - 1])} ${Y(points[n - 1])}`;
+  return d;
 }

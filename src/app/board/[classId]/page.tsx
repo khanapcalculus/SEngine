@@ -5,35 +5,31 @@
  *
  * Opened in its own browser window from the Classroom view (window.open), this
  * route lives OUTSIDE /dashboard so it carries no sidebar/header — just the
- * board. It reuses the existing, already-deployed RTC stack end to end:
- *   • useWhiteboardSocket → token mint → Cloudflare Worker → Durable Object
- *   • the connection core treats a `stroke` op's payload as OPAQUE, so we pack
- *     a whole continuous path + its color + width into one stroke op. The
- *     Worker/DO never parse it, so NOTHING on the backend has to change.
+ * board. It reuses the already-deployed RTC stack end to end (useWhiteboardSocket
+ * → token mint → Cloudflare Worker → Durable Object). Op payloads are OPAQUE to
+ * the backend, so the whole tool set rides on the existing `stroke`/`shape`/
+ * `equation` op types; only the client connection core gained an `erase` op for
+ * the object eraser.
  *
- * Drawing engine: pointer down → move → up builds one path; the in-progress
- * "draft" renders locally for instant feedback, and the finished path is sent
- * as a single stroke op (sendOp also echoes it into `ops` locally, since the DO
- * broadcasts only to OTHER peers). Coordinates are normalized 0..1 so peers on
- * different window sizes stay in agreement.
- *
- * Capabilities mirror the server: only `canDraw` peers (educators + tutoring
- * students, decided in /api/me/classroom/token) get the tools; everyone else
- * connects view-only.
+ * Tools: smooth pen, geometry (line/rect/ellipse/arrow), plain text + LaTeX math
+ * (KaTeX), image + PDF insert (rasterized client-side), and an object eraser.
+ * Every created object carries a stable id so the eraser can target it for all
+ * peers. Capabilities mirror the server: only `canDraw` peers get the tools.
  */
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useParams } from "next/navigation";
 import { useWhiteboardSocket } from "../../dashboard/whiteboard/useWhiteboardSocket";
 import type { ConnectionStatus } from "../../dashboard/whiteboard/connection";
 import {
-  asStroke,
   isFarEnough,
   packStrokePayload,
   BG,
@@ -43,12 +39,22 @@ import {
   MAX_POINTS,
   type Pt,
 } from "./strokes";
+import {
+  idOf,
+  topmostHit,
+  DEFAULT_FONT_SIZE,
+  type Tool,
+  type Size,
+} from "./tools";
+import { uploadBoardImage, imageNaturalSize, fitNormalized } from "./upload";
+import { renderOp, katexHtml } from "./render";
 
 /* ── tool constants (page-local) ────────────────────────────────── */
 const PALETTE = ["#7fd1ff", "#ff8fab", "#9be8b4", "#ffd479", "#c8a6ff", "#ffffff"];
 const MIN_WIDTH = 1;
 const MAX_WIDTH = 28;
 const CURSOR_THROTTLE_MS = 60;
+const GEO_TOOLS = new Set<Tool>(["line", "rect", "ellipse", "arrow"]);
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
   idle: "Idle",
@@ -67,6 +73,20 @@ const STATUS_COLOR: Record<ConnectionStatus, string> = {
   error: "#ff8080",
 };
 
+const newId = () => crypto.randomUUID();
+
+interface ShapeDraft {
+  kind: "line" | "rect" | "ellipse" | "arrow";
+  start: Pt;
+  end: Pt;
+}
+interface Editing {
+  kind: "text" | "math";
+  x: number;
+  y: number;
+  value: string;
+}
+
 export default function BoardPage() {
   const params = useParams();
   const classId =
@@ -76,18 +96,24 @@ export default function BoardPage() {
         ? params.classId[0]
         : "";
 
-  const { status, canDraw, role, error, ops, cursors, sendOp, reconnect } =
+  const { status, canDraw, role, error, ops, cursors, erased, sendOp, reconnect } =
     useWhiteboardSocket(classId || null);
 
-  /* ── tools ─────────────────────────────────────────────────────── */
+  /* ── tool state ────────────────────────────────────────────────── */
+  const [tool, setTool] = useState<Tool>("pen");
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
-  const [erasing, setErasing] = useState(false);
-  const effectiveColor = erasing ? BG : color;
+  const [fill, setFill] = useState(false);
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
 
   /* ── viewport mapping (normalized 0..1 ↔ pixels) ───────────────── */
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
+  const [size, setSize] = useState<Size>({ w: 0, h: 0 });
   useEffect(() => {
     const el = svgRef.current;
     if (!el) return;
@@ -116,69 +142,186 @@ export default function BoardPage() {
   const drawing = useRef(false);
   const draftRef = useRef<Pt[]>([]);
   const [draft, setDraft] = useState<Pt[]>([]);
+  const shapeStart = useRef<Pt | null>(null);
+  const [shapeDraft, setShapeDraft] = useState<ShapeDraft | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
   const lastCursorSent = useRef(0);
 
-  function onPointerDown(e: ReactPointerEvent) {
-    if (!canDraw || status !== "open") return;
-    const p = toNorm(e);
-    if (!p) return;
-    drawing.current = true;
-    draftRef.current = [p];
-    setDraft([p]);
+  const ready = canDraw && status === "open";
+
+  function capture(e: ReactPointerEvent) {
     try {
       (e.target as Element).setPointerCapture?.(e.pointerId);
     } catch {
-      /* capture is best-effort */
+      /* best-effort */
+    }
+  }
+  function release(e: ReactPointerEvent) {
+    try {
+      (e.target as Element).releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* noop */
+    }
+  }
+
+  function onPointerDown(e: ReactPointerEvent) {
+    if (!ready) return;
+    const p = toNorm(e);
+    if (!p) return;
+
+    if (tool === "pen") {
+      drawing.current = true;
+      draftRef.current = [p];
+      setDraft([p]);
+      capture(e);
+      return;
+    }
+    if (GEO_TOOLS.has(tool)) {
+      shapeStart.current = p;
+      setShapeDraft({ kind: tool as ShapeDraft["kind"], start: p, end: p });
+      capture(e);
+      return;
+    }
+    if (tool === "text" || tool === "math") {
+      setEditing({ kind: tool, x: p.x, y: p.y, value: "" });
+      return;
+    }
+    if (tool === "erase") {
+      const id = topmostHit(ops, erased, p, size);
+      if (id) sendOp({ type: "erase", payload: { targetId: id } });
+      return;
     }
   }
 
   function onPointerMove(e: ReactPointerEvent) {
-    // Cursor presence is always shared when connected, drawing or not.
-    const now = Date.now();
-    if (now - lastCursorSent.current >= CURSOR_THROTTLE_MS) {
-      lastCursorSent.current = now;
-      const c = toNorm(e);
-      if (c) sendOp({ type: "cursor", payload: c });
+    // Cursor presence is shared whenever connected (drawing or not).
+    if (status === "open") {
+      const now = Date.now();
+      if (now - lastCursorSent.current >= CURSOR_THROTTLE_MS) {
+        lastCursorSent.current = now;
+        const c = toNorm(e);
+        if (c) sendOp({ type: "cursor", payload: c });
+      }
     }
 
-    if (!drawing.current) return;
-    const p = toNorm(e);
-    if (!p) return;
-    const pts = draftRef.current;
-    if (pts.length >= MAX_POINTS) return;
-    // Distance-thinning: drop points that barely moved (keeps the path lean).
-    if (!isFarEnough(pts[pts.length - 1], p, MIN_POINT_DELTA)) return;
-    pts.push(p);
-    setDraft([...pts]);
+    if (tool === "pen" && drawing.current) {
+      const p = toNorm(e);
+      if (!p) return;
+      const pts = draftRef.current;
+      if (pts.length >= MAX_POINTS) return;
+      if (!isFarEnough(pts[pts.length - 1], p, MIN_POINT_DELTA)) return;
+      pts.push(p);
+      setDraft([...pts]);
+    } else if (GEO_TOOLS.has(tool) && shapeStart.current) {
+      const p = toNorm(e);
+      if (p) setShapeDraft((d) => (d ? { ...d, end: p } : d));
+    }
   }
 
-  const finishStroke = useCallback(
-    (e: ReactPointerEvent) => {
+  function onPointerUp(e: ReactPointerEvent) {
+    if (tool === "pen") {
       if (!drawing.current) return;
       drawing.current = false;
-      try {
-        (e.target as Element).releasePointerCapture?.(e.pointerId);
-      } catch {
-        /* noop */
-      }
+      release(e);
       const points = draftRef.current;
       draftRef.current = [];
       setDraft([]);
       if (points.length === 0) return;
-      // Pack the whole path into the opaque stroke payload — backend unchanged.
       sendOp({
         type: "stroke",
-        payload: packStrokePayload(points, effectiveColor, width),
+        payload: packStrokePayload(points, color, width, newId()),
       });
-    },
-    [effectiveColor, width, sendOp],
-  );
+      return;
+    }
+    if (GEO_TOOLS.has(tool) && shapeStart.current) {
+      const start = shapeStart.current;
+      const d = shapeDraft;
+      shapeStart.current = null;
+      setShapeDraft(null);
+      release(e);
+      if (!d) return;
+      // Ignore a stray click that didn't drag into a real shape.
+      if (Math.abs(d.end.x - start.x) < 0.002 && Math.abs(d.end.y - start.y) < 0.002) {
+        return;
+      }
+      const id = newId();
+      const payload =
+        tool === "line" || tool === "arrow"
+          ? { id, kind: tool, start, end: d.end, color, width }
+          : { id, kind: tool, start, end: d.end, color, width, fill };
+      sendOp({ type: "shape", payload });
+    }
+  }
+
+  function commitEditing() {
+    if (!editing) return;
+    const v = editing.value.trim();
+    const { kind, x, y } = editing;
+    setEditing(null);
+    if (!v) return;
+    const id = newId();
+    if (kind === "text") {
+      sendOp({ type: "shape", payload: { id, kind: "text", x, y, text: v, fontSize, color } });
+    } else {
+      sendOp({ type: "equation", payload: { id, x, y, latex: v, fontSize, color } });
+    }
+  }
 
   const clearBoard = useCallback(() => {
     draftRef.current = [];
     setDraft([]);
-    sendOp({ type: "clear" }); // local wipe + broadcast (handled in the core)
+    sendOp({ type: "clear" });
   }, [sendOp]);
+
+  /* ── image / pdf insert ────────────────────────────────────────── */
+  async function onImageFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setNotice(null);
+    setBusy("Uploading image…");
+    try {
+      const dims = await imageNaturalSize(file);
+      const url = await uploadBoardImage(classId, file, file.name);
+      const box = fitNormalized(dims.width, dims.height, size);
+      const x = Math.max(0, 0.5 - box.w / 2);
+      const y = Math.max(0, 0.5 - box.h / 2);
+      sendOp({ type: "shape", payload: { id: newId(), kind: "image", url, x, y, w: box.w, h: box.h } });
+    } catch {
+      setNotice("Image upload failed (is BLOB_READ_WRITE_TOKEN configured?).");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onPdfFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setNotice(null);
+    setBusy("Rendering PDF…");
+    try {
+      // Dynamic import keeps the ~1MB pdf.js bundle out of first paint.
+      const { rasterizePdf } = await import("./pdf");
+      const pages = await rasterizePdf(file);
+      if (pages.length === 0) throw new Error("no pages");
+      for (let i = 0; i < pages.length; i++) {
+        setBusy(`Uploading page ${i + 1}/${pages.length}…`);
+        const pg = pages[i];
+        const url = await uploadBoardImage(classId, pg.blob, `${file.name}-p${i + 1}.png`);
+        const box = fitNormalized(pg.width, pg.height, size);
+        // Stagger pages so a multi-page doc doesn't stack into one spot.
+        const off = i * 0.04;
+        const x = Math.max(0, Math.min(0.95 - box.w, 0.06 + off));
+        const y = Math.max(0, Math.min(0.95 - box.h, 0.06 + off));
+        sendOp({ type: "shape", payload: { id: newId(), kind: "image", url, x, y, w: box.w, h: box.h } });
+      }
+    } catch {
+      setNotice("Could not import that PDF.");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   /* ── render data ───────────────────────────────────────────────── */
   const cursorMarks = useMemo(
@@ -194,11 +337,14 @@ export default function BoardPage() {
     [cursors],
   );
 
-  const toPolyline = useCallback(
-    (points: Pt[]) =>
-      points.map((p) => `${p.x * size.w},${p.y * size.h}`).join(" "),
-    [size.w, size.h],
-  );
+  const cursorStyle =
+    !canDraw
+      ? "default"
+      : tool === "erase"
+        ? "cell"
+        : tool === "text" || tool === "math"
+          ? "text"
+          : "crosshair";
 
   if (!classId) {
     return (
@@ -225,53 +371,26 @@ export default function BoardPage() {
         height="100%"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={finishStroke}
-        onPointerLeave={finishStroke}
-        onPointerCancel={finishStroke}
-        style={{
-          display: "block",
-          width: "100vw",
-          height: "100vh",
-          cursor: canDraw ? (erasing ? "cell" : "crosshair") : "default",
-        }}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerUp}
+        onPointerCancel={onPointerUp}
+        style={{ display: "block", width: "100vw", height: "100vh", cursor: cursorStyle }}
       >
-        {/* committed + replayed strokes */}
+        {/* committed + replayed ops (skip erased) */}
         {ops.map((op, i) => {
-          if (op.type !== "stroke") return null;
-          const s = asStroke(op.payload);
-          if (!s) return null;
-          return s.points.length === 1 ? (
-            <circle
-              key={i}
-              cx={s.points[0].x * size.w}
-              cy={s.points[0].y * size.h}
-              r={s.width / 2}
-              fill={s.color}
-            />
-          ) : (
-            <polyline
-              key={i}
-              points={toPolyline(s.points)}
-              fill="none"
-              stroke={s.color}
-              strokeWidth={s.width}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          );
+          const id = idOf(op);
+          if (id && erased.has(id)) return null;
+          return <Fragment key={id ?? i}>{renderOp(op, size)}</Fragment>;
         })}
 
-        {/* in-progress local draft (instant feedback before it commits) */}
-        {draft.length > 0 && (
-          <polyline
-            points={toPolyline(draft)}
-            fill="none"
-            stroke={effectiveColor}
-            strokeWidth={width}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
+        {/* live drafts */}
+        {draft.length > 0 &&
+          renderOp({ type: "stroke", payload: { points: draft, color, width } }, size)}
+        {shapeDraft &&
+          renderOp(
+            { type: "shape", payload: { ...shapeDraft, color, width, fill } },
+            size,
+          )}
 
         {/* peer cursors */}
         {cursorMarks.map((c) => (
@@ -282,21 +401,55 @@ export default function BoardPage() {
         ))}
       </svg>
 
+      {/* text / math inline editor */}
+      {editing && (
+        <Editor
+          editing={editing}
+          size={size}
+          color={color}
+          fontSize={fontSize}
+          onChange={(value) => setEditing((s) => (s ? { ...s, value } : s))}
+          onCommit={commitEditing}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+
+      {/* hidden file inputs for image / pdf */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/png,image/jpeg"
+        onChange={onImageFile}
+        style={{ display: "none" }}
+      />
+      <input
+        ref={pdfInputRef}
+        type="file"
+        accept="application/pdf"
+        onChange={onPdfFile}
+        style={{ display: "none" }}
+      />
+
       <Toolbar
         classId={classId}
         status={status}
         role={role}
         canDraw={canDraw}
         error={error}
+        notice={notice}
+        busy={busy}
+        tool={tool}
+        setTool={setTool}
         color={color}
-        setColor={(c) => {
-          setColor(c);
-          setErasing(false);
-        }}
+        setColor={setColor}
         width={width}
         setWidth={setWidth}
-        erasing={erasing}
-        setErasing={setErasing}
+        fill={fill}
+        setFill={setFill}
+        fontSize={fontSize}
+        setFontSize={setFontSize}
+        onPickImage={() => imageInputRef.current?.click()}
+        onPickPdf={() => pdfInputRef.current?.click()}
         onClear={clearBoard}
         onReconnect={reconnect}
       />
@@ -304,19 +457,144 @@ export default function BoardPage() {
   );
 }
 
+/* ── inline text / math editor (HTML overlay positioned on the canvas) ── */
+function Editor({
+  editing,
+  size,
+  color,
+  fontSize,
+  onChange,
+  onCommit,
+  onCancel,
+}: {
+  editing: Editing;
+  size: Size;
+  color: string;
+  fontSize: number;
+  onChange: (v: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  const left = editing.x * size.w;
+  const top = editing.y * size.h;
+  const isMath = editing.kind === "math";
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        background: "rgba(17,22,42,0.96)",
+        border: "1px solid rgba(255,255,255,0.18)",
+        borderRadius: 8,
+        padding: 8,
+        boxShadow: "0 6px 22px rgba(0,0,0,0.5)",
+        zIndex: 20,
+      }}
+    >
+      {isMath ? (
+        <textarea
+          autoFocus
+          value={editing.value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onCommit();
+            if (e.key === "Escape") onCancel();
+          }}
+          placeholder="LaTeX, e.g. \frac{a}{b}"
+          style={{
+            minWidth: 220,
+            minHeight: 48,
+            fontFamily: "monospace",
+            fontSize: 13,
+            color: "#e6e9f2",
+            background: "#0f1424",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 6,
+            padding: 6,
+          }}
+        />
+      ) : (
+        <input
+          autoFocus
+          value={editing.value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onCommit();
+            if (e.key === "Escape") onCancel();
+          }}
+          placeholder="Type a label…"
+          style={{
+            minWidth: 200,
+            fontSize,
+            color,
+            background: "#0f1424",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 6,
+            padding: "6px 8px",
+          }}
+        />
+      )}
+
+      {isMath && editing.value.trim() && (
+        <div
+          style={{ color, fontSize, background: "#11162a", padding: "4px 6px", borderRadius: 6 }}
+          dangerouslySetInnerHTML={{ __html: katexHtml(editing.value) }}
+        />
+      )}
+
+      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+        <button type="button" onClick={onCancel} style={miniBtn}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onCommit}
+          style={{ ...miniBtn, background: "#5570ff", color: "#fff", borderColor: "#5570ff" }}
+        >
+          {isMath ? "Add (⌘↵)" : "Add (↵)"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ── floating toolbar ─────────────────────────────────────────────── */
+const TOOLS: { id: Tool; label: string; title: string }[] = [
+  { id: "pen", label: "✏️", title: "Pen" },
+  { id: "line", label: "╱", title: "Line" },
+  { id: "arrow", label: "↗", title: "Arrow" },
+  { id: "rect", label: "▭", title: "Rectangle" },
+  { id: "ellipse", label: "◯", title: "Ellipse" },
+  { id: "text", label: "T", title: "Text" },
+  { id: "math", label: "∑", title: "Math (LaTeX)" },
+  { id: "erase", label: "⌫", title: "Object eraser" },
+];
+
 function Toolbar({
   classId,
   status,
   role,
   canDraw,
   error,
+  notice,
+  busy,
+  tool,
+  setTool,
   color,
   setColor,
   width,
   setWidth,
-  erasing,
-  setErasing,
+  fill,
+  setFill,
+  fontSize,
+  setFontSize,
+  onPickImage,
+  onPickPdf,
   onClear,
   onReconnect,
 }: {
@@ -325,28 +603,38 @@ function Toolbar({
   role: string | null;
   canDraw: boolean;
   error: string | null;
+  notice: string | null;
+  busy: string | null;
+  tool: Tool;
+  setTool: (t: Tool) => void;
   color: string;
   setColor: (c: string) => void;
   width: number;
   setWidth: (w: number) => void;
-  erasing: boolean;
-  setErasing: (e: boolean) => void;
+  fill: boolean;
+  setFill: (f: boolean) => void;
+  fontSize: number;
+  setFontSize: (n: number) => void;
+  onPickImage: () => void;
+  onPickPdf: () => void;
   onClear: () => void;
   onReconnect: () => void;
 }) {
   const disconnected = status === "error" || status === "closed";
+  const showFill = tool === "rect" || tool === "ellipse";
+  const showFont = tool === "text" || tool === "math";
 
   return (
     <div
       style={{
         position: "fixed",
-        top: 14,
+        top: 12,
         left: "50%",
         transform: "translateX(-50%)",
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        padding: "8px 14px",
+        gap: 10,
+        padding: "8px 12px",
         background: "rgba(17,22,42,0.92)",
         border: "1px solid rgba(255,255,255,0.12)",
         borderRadius: 12,
@@ -354,22 +642,53 @@ function Toolbar({
         backdropFilter: "blur(8px)",
         fontSize: 13,
         flexWrap: "wrap",
-        maxWidth: "calc(100vw - 28px)",
+        maxWidth: "calc(100vw - 24px)",
+        zIndex: 30,
       }}
     >
-      {/* status */}
       <span
         style={{ color: STATUS_COLOR[status], fontWeight: 700, whiteSpace: "nowrap" }}
         title={`Class ${classId.slice(0, 8)}…`}
       >
         ● {STATUS_LABEL[status]}
       </span>
-      {role && (
-        <span style={{ opacity: 0.7, textTransform: "capitalize" }}>{role}</span>
-      )}
+      {role && <span style={{ opacity: 0.7, textTransform: "capitalize" }}>{role}</span>}
 
       {canDraw ? (
         <>
+          <Divider />
+          {/* tools */}
+          <div style={{ display: "flex", gap: 4 }}>
+            {TOOLS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                title={t.title}
+                aria-pressed={tool === t.id}
+                onClick={() => setTool(t.id)}
+                style={{
+                  ...toolBtn,
+                  minWidth: 30,
+                  textAlign: "center",
+                  background: tool === t.id ? "#5570ff" : "transparent",
+                  color: tool === t.id ? "#fff" : "#c7cde0",
+                  borderColor: tool === t.id ? "#5570ff" : "rgba(255,255,255,0.2)",
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <Divider />
+          {/* insert image / pdf */}
+          <button type="button" style={toolBtn} onClick={onPickImage} title="Insert image">
+            🖼 Image
+          </button>
+          <button type="button" style={toolBtn} onClick={onPickPdf} title="Insert PDF">
+            📄 PDF
+          </button>
+
           <Divider />
           {/* palette */}
           <div style={{ display: "flex", gap: 5 }}>
@@ -385,14 +704,10 @@ function Toolbar({
                   borderRadius: "50%",
                   background: c,
                   cursor: "pointer",
-                  border:
-                    !erasing && color === c
-                      ? "2px solid #fff"
-                      : "2px solid rgba(255,255,255,0.25)",
+                  border: color === c ? "2px solid #fff" : "2px solid rgba(255,255,255,0.25)",
                 }}
               />
             ))}
-            {/* custom color */}
             <input
               type="color"
               aria-label="Custom color"
@@ -410,48 +725,49 @@ function Toolbar({
             />
           </div>
 
-          <Divider />
-          {/* width */}
-          <label
-            style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}
-          >
-            <span style={{ opacity: 0.7 }}>Size</span>
-            <input
-              type="range"
-              min={MIN_WIDTH}
-              max={MAX_WIDTH}
-              value={width}
-              onChange={(e) => setWidth(Number(e.target.value))}
-              style={{ width: 90 }}
-            />
-            <span
-              style={{
-                display: "inline-block",
-                width: 22,
-                textAlign: "right",
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              {width}
-            </span>
-          </label>
+          {showFont ? (
+            <>
+              <Divider />
+              <label style={ctrlLabel}>
+                <span style={{ opacity: 0.7 }}>Font</span>
+                <input
+                  type="range"
+                  min={10}
+                  max={64}
+                  value={fontSize}
+                  onChange={(e) => setFontSize(Number(e.target.value))}
+                  style={{ width: 80 }}
+                />
+                <span style={num}>{fontSize}</span>
+              </label>
+            </>
+          ) : (
+            <>
+              <Divider />
+              <label style={ctrlLabel}>
+                <span style={{ opacity: 0.7 }}>Size</span>
+                <input
+                  type="range"
+                  min={MIN_WIDTH}
+                  max={MAX_WIDTH}
+                  value={width}
+                  onChange={(e) => setWidth(Number(e.target.value))}
+                  style={{ width: 80 }}
+                />
+                <span style={num}>{width}</span>
+              </label>
+            </>
+          )}
+
+          {showFill && (
+            <label style={{ ...ctrlLabel, cursor: "pointer" }}>
+              <input type="checkbox" checked={fill} onChange={(e) => setFill(e.target.checked)} />
+              <span style={{ opacity: 0.8 }}>Fill</span>
+            </label>
+          )}
 
           <Divider />
-          {/* eraser */}
-          <button
-            type="button"
-            onClick={() => setErasing(!erasing)}
-            style={{
-              ...toolBtn,
-              background: erasing ? "#5570ff" : "transparent",
-              color: erasing ? "#fff" : "#c7cde0",
-              borderColor: erasing ? "#5570ff" : "rgba(255,255,255,0.2)",
-            }}
-          >
-            Eraser
-          </button>
-          {/* clear */}
-          <button type="button" onClick={onClear} style={toolBtn}>
+          <button type="button" onClick={onClear} style={toolBtn} title="Clear the whole board">
             Clear
           </button>
         </>
@@ -459,6 +775,13 @@ function Toolbar({
         <>
           <Divider />
           <span style={{ opacity: 0.7 }}>View only</span>
+        </>
+      )}
+
+      {busy && (
+        <>
+          <Divider />
+          <span style={{ color: "#ffcf8f", whiteSpace: "nowrap" }}>{busy}</span>
         </>
       )}
 
@@ -475,9 +798,9 @@ function Toolbar({
         </>
       )}
 
-      {error && status !== "open" && (
-        <span style={{ color: "#ff8080", maxWidth: 220 }} role="alert">
-          {error}
+      {(notice || (error && status !== "open")) && (
+        <span style={{ color: "#ff8080", maxWidth: 240 }} role="alert">
+          {notice ?? error}
         </span>
       )}
 
@@ -496,15 +819,12 @@ function Toolbar({
 
 function Divider() {
   return (
-    <span
-      aria-hidden
-      style={{ width: 1, height: 22, background: "rgba(255,255,255,0.14)" }}
-    />
+    <span aria-hidden style={{ width: 1, height: 22, background: "rgba(255,255,255,0.14)" }} />
   );
 }
 
 const toolBtn: React.CSSProperties = {
-  padding: "5px 10px",
+  padding: "5px 9px",
   fontSize: 13,
   borderRadius: 8,
   border: "1px solid rgba(255,255,255,0.2)",
@@ -512,6 +832,26 @@ const toolBtn: React.CSSProperties = {
   color: "#c7cde0",
   cursor: "pointer",
   whiteSpace: "nowrap",
+};
+
+const miniBtn: React.CSSProperties = {
+  ...toolBtn,
+  padding: "4px 8px",
+  fontSize: 12,
+};
+
+const ctrlLabel: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  whiteSpace: "nowrap",
+};
+
+const num: React.CSSProperties = {
+  display: "inline-block",
+  width: 22,
+  textAlign: "right",
+  fontVariantNumeric: "tabular-nums",
 };
 
 function Centered({ children }: { children: React.ReactNode }) {
