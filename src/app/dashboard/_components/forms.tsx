@@ -1070,9 +1070,19 @@ export function CreateBranchForm({
 }) {
   const [location, setLocation] = useState("");
   const [status, setStatus] = useState("active");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const disabled = !orgId;
+
+  function validateForm(): boolean {
+    const errors: Record<string, string> = {};
+    if (!location.trim()) errors.location = "Branch location is required";
+    else if (location.length > 512)
+      errors.location = "Location must be 512 characters or less";
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -1080,19 +1090,23 @@ export function CreateBranchForm({
       setErr("Select an organization first.");
       return;
     }
+    if (!validateForm()) return;
     setErr(null);
     setBusy(true);
     try {
       const res = await fetch("/api/admin/branches", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ orgId, location, status }),
+        body: JSON.stringify({ orgId, location: location.trim(), status }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) return setErr(fmtErr(d));
       onCreated(d);
       setLocation("");
       setStatus("active");
+      setFieldErrors({});
+    } catch {
+      setErr("An unexpected error occurred. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -1105,14 +1119,20 @@ export function CreateBranchForm({
           ? `Adds a branch to ${orgName ?? "the selected organization"}.`
           : "Select an organization above to add a branch."}
       </p>
-      <input
-        style={inp}
-        placeholder="Branch location (e.g. Riverside Campus)"
-        required
-        disabled={disabled}
-        value={location}
-        onChange={(e) => setLocation(e.target.value)}
-      />
+      <div>
+        <input
+          style={inp}
+          placeholder="Branch location (e.g. Riverside Campus)"
+          disabled={disabled}
+          value={location}
+          onChange={(e) => setLocation(e.target.value)}
+        />
+        {fieldErrors.location && (
+          <p role="alert" style={fieldErrorStyle}>
+            {fieldErrors.location}
+          </p>
+        )}
+      </div>
       <select
         style={inp}
         disabled={disabled}

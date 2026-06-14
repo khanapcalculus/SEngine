@@ -1,0 +1,28 @@
+# Cloudflare Worker hosting the RTC Whiteboard Durable Object.
+#
+# Deploys INDEPENDENTLY of the Next.js app on Vercel. The only contract between
+# them is the shared RTC_JWT_SECRET (so the Worker can verify handshake tokens
+# minted by /api/me/classroom/token) and the wire protocol of WhiteboardRoom.
+name = "sengine-whiteboard"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+# Required for the Durable Object Hibernation WebSocket API used by WhiteboardRoom.
+compatibility_flags = ["nodejs_compat"]
+
+# One Durable Object class: the per-class whiteboard room.
+[[durable_objects.bindings]]
+name = "WHITEBOARD_ROOM"
+class_name = "WhiteboardRoom"
+
+# WhiteboardRoom holds no SQL storage yet (in-memory replay buffer only), so a
+# new_classes migration is sufficient. Switch to new_sqlite_classes if/when the
+# board is persisted to DO storage.
+[[migrations]]
+tag = "v1"
+new_classes = ["WhiteboardRoom"]
+
+# Secrets (set via `wrangler secret put`, never committed):
+#   RTC_JWT_SECRET  — MUST match the Vercel app's RTC_JWT_SECRET.
+[vars]
+# Non-secret defaults can go here. RTC_JWT_SECRET is intentionally NOT listed;
+# set it with: wrangler secret put RTC_JWT_SECRET

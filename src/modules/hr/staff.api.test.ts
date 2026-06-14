@@ -101,7 +101,7 @@ function makeFakeDb() {
           if (tableName === "users") {
             const row = { id: `user-${state.users.length + 1}`, ...vals };
             state.users.push(row);
-            return [{ id: row.id, email: row.email }];
+            return [{ id: row.id, email: vals.email }];
           }
           const row = { id: `staff-${state.staff.length + 1}`, ...vals };
           state.staff.push(row);
@@ -275,7 +275,9 @@ describe("GET /api/staff/branch/[branchId]", () => {
   it("403 for non-privileged role", async () => {
     currentCtx = TEACHER;
     const { GET } = await import("../../app/api/staff/branch/[branchId]/route");
-    const res = await GET(new Request("http://x"), { params: { branchId } });
+    const res = await GET(new Request("http://x"), {
+      params: Promise.resolve({ branchId }),
+    });
     expect(res.status).toBe(403);
   });
 
@@ -283,7 +285,7 @@ describe("GET /api/staff/branch/[branchId]", () => {
     currentCtx = BRANCH_MGR;
     const { GET } = await import("../../app/api/staff/branch/[branchId]/route");
     const res = await GET(new Request("http://x"), {
-      params: { branchId: "not-a-uuid" },
+      params: Promise.resolve({ branchId: "not-a-uuid" }),
     });
     expect(res.status).toBe(400);
   });
@@ -313,7 +315,9 @@ describe("GET /api/staff/branch/[branchId]", () => {
       },
     );
     const { GET } = await import("../../app/api/staff/branch/[branchId]/route");
-    const res = await GET(new Request("http://x"), { params: { branchId } });
+    const res = await GET(new Request("http://x"), {
+      params: Promise.resolve({ branchId }),
+    });
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.count).toBe(2);

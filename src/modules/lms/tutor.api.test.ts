@@ -41,10 +41,30 @@ vi.mock("./gemma.factory", () => ({
 
 const CLASS_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 
-const TEACHER: AuthContext = { userId: "meghan", role: "teacher", orgId: "org" };
-const STUDENT: AuthContext = { userId: "raj", role: "student", orgId: "org" };
-const PARENT: AuthContext = { userId: "p", role: "parent", orgId: "org" };
-const SUPER_ADMIN: AuthContext = { userId: "sa", role: "super_admin", orgId: null };
+const TEACHER: AuthContext = {
+  userId: "meghan",
+  role: "teacher",
+  orgId: "org",
+  branchId: "branch",
+};
+const STUDENT: AuthContext = {
+  userId: "raj",
+  role: "student",
+  orgId: "org",
+  branchId: "branch",
+};
+const PARENT: AuthContext = {
+  userId: "p",
+  role: "parent",
+  orgId: "org",
+  branchId: null,
+};
+const SUPER_ADMIN: AuthContext = {
+  userId: "sa",
+  role: "super_admin",
+  orgId: null,
+  branchId: null,
+};
 
 function req(body: unknown): Request {
   return new Request("http://x/api/ai/tutor-copilot", {
