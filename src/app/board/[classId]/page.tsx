@@ -75,6 +75,17 @@ const STATUS_COLOR: Record<ConnectionStatus, string> = {
 
 const newId = () => crypto.randomUUID();
 
+/** Best-effort human message from an upload failure (Blob client throws Error). */
+function uploadErr(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  // The Blob client surfaces the route's JSON error in its message; if it
+  // mentions the token, give the actionable hint.
+  if (/BLOB_READ_WRITE_TOKEN|not configured|store/i.test(msg)) {
+    return "image storage isn't configured on the server yet.";
+  }
+  return msg || "unknown error";
+}
+
 interface ShapeDraft {
   kind: "line" | "rect" | "ellipse" | "arrow";
   start: Pt;
@@ -287,8 +298,8 @@ export default function BoardPage() {
       const x = Math.max(0, 0.5 - box.w / 2);
       const y = Math.max(0, 0.5 - box.h / 2);
       sendOp({ type: "shape", payload: { id: newId(), kind: "image", url, x, y, w: box.w, h: box.h } });
-    } catch {
-      setNotice("Image upload failed (is BLOB_READ_WRITE_TOKEN configured?).");
+    } catch (err) {
+      setNotice(`Image upload failed: ${uploadErr(err)}`);
     } finally {
       setBusy(null);
     }
@@ -299,12 +310,28 @@ export default function BoardPage() {
     e.target.value = "";
     if (!file) return;
     setNotice(null);
+
+    // Phase 1: render the PDF to page images (pure client, no network).
     setBusy("Rendering PDF…");
+    let pages;
     try {
       // Dynamic import keeps the ~1MB pdf.js bundle out of first paint.
       const { rasterizePdf } = await import("./pdf");
-      const pages = await rasterizePdf(file);
-      if (pages.length === 0) throw new Error("no pages");
+      pages = await rasterizePdf(file);
+    } catch {
+      setBusy(null);
+      setNotice("Could not read that PDF (is it a valid, unencrypted file?).");
+      return;
+    }
+    if (pages.length === 0) {
+      setBusy(null);
+      setNotice("That PDF has no pages to import.");
+      return;
+    }
+
+    // Phase 2: upload each page image. A failure here is an UPLOAD problem, not
+    // a PDF problem — report it as such.
+    try {
       for (let i = 0; i < pages.length; i++) {
         setBusy(`Uploading page ${i + 1}/${pages.length}…`);
         const pg = pages[i];
@@ -316,8 +343,8 @@ export default function BoardPage() {
         const y = Math.max(0, Math.min(0.95 - box.h, 0.06 + off));
         sendOp({ type: "shape", payload: { id: newId(), kind: "image", url, x, y, w: box.w, h: box.h } });
       }
-    } catch {
-      setNotice("Could not import that PDF.");
+    } catch (err) {
+      setNotice(`PDF page upload failed: ${uploadErr(err)}`);
     } finally {
       setBusy(null);
     }
