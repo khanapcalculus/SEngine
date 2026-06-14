@@ -19,6 +19,7 @@ import { json, handleError } from "../../../../../lib/http";
 import { assertClassAccess } from "../../../../../modules/lms/membership.service";
 import { getGemmaClient } from "../../../../../modules/lms/gemma.factory";
 import { runDerivation } from "../../../../../modules/lms/derivation.service";
+import { appendAiDerivation } from "../../../../../modules/lms/discussion.service";
 
 export const runtime = "nodejs";
 
@@ -43,10 +44,28 @@ export async function POST(req: Request): Promise<Response> {
 
     const result = await runDerivation(getGemmaClient(), input);
 
+    // Persist into the class discussion so it stays saved for students.
+    // Best-effort: a failed save must never lose the generated derivation, so
+    // we still return it and report saved:false instead of erroring.
+    let threadId: string | null = null;
+    try {
+      const saved = await appendAiDerivation(getDb(), ctx, {
+        classId: input.classId,
+        problem: input.whiteboardContext,
+        derivation: result.derivation,
+        model: result.model,
+      });
+      threadId = saved.threadId;
+    } catch {
+      threadId = null;
+    }
+
     return json({
       classId: input.classId,
       model: result.model,
       derivation: result.derivation,
+      saved: threadId !== null,
+      threadId,
     });
   } catch (err) {
     return handleError(err);

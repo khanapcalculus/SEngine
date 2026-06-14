@@ -37,7 +37,17 @@ const assertClassAccess = vi.fn(async () => {
 });
 vi.mock("./membership.service", () => ({ assertClassAccess }));
 
-// The route passes getDb() to assertClassAccess (mocked), so a stub is fine.
+/* ── Mock the discussion persistence (unit-tested separately) ────── */
+let saveError: Error | null = null;
+const appendAiDerivation = vi.fn(
+  async (_db: unknown, _ctx: unknown, _input: unknown) => {
+    if (saveError) throw saveError;
+    return { threadId: "thread-1", postId: "post-1", createdThread: true };
+  },
+);
+vi.mock("./discussion.service", () => ({ appendAiDerivation }));
+
+// The route passes getDb() to the (mocked) services, so a stub is fine.
 vi.mock("../../db/client", () => ({ getDb: () => ({}) }));
 
 /* ── Mock the Gemma factory with a capturing fake client ────────── */
@@ -87,8 +97,10 @@ async function post(r: Request) {
 beforeEach(() => {
   currentCtx = TEACHER;
   membershipError = null;
+  saveError = null;
   lastRequest = null;
   assertClassAccess.mockClear();
+  appendAiDerivation.mockClear();
 });
 
 describe("POST /api/me/ai/derivation", () => {
@@ -147,6 +159,33 @@ describe("POST /api/me/ai/derivation", () => {
     expect(userMsg).toContain("\\int_0^1 x^2");
     expect(userMsg).toContain("focus on the integration step");
     expect(lastRequest?.temperature).toBe(0.2);
+  });
+
+  it("saves the derivation to the class discussion", async () => {
+    const res = await post(req(VALID));
+    const data = await res.json();
+    expect(data.saved).toBe(true);
+    expect(data.threadId).toBe("thread-1");
+    expect(appendAiDerivation).toHaveBeenCalledTimes(1);
+    const arg = appendAiDerivation.mock.calls[0]?.[2] as {
+      classId: string;
+      problem: string;
+      derivation: string;
+      model: string;
+    };
+    expect(arg.classId).toBe(CLASS_ID);
+    expect(arg.derivation).toBe(fakeAnswer);
+    expect(arg.problem).toContain("\\int_0^1 x^2");
+  });
+
+  it("still returns the derivation if saving fails (non-fatal)", async () => {
+    saveError = new Error("db down");
+    const res = await post(req(VALID));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.derivation).toBe(fakeAnswer); // not lost
+    expect(data.saved).toBe(false);
+    expect(data.threadId).toBeNull();
   });
 
   it("200 with no prompt falls back to a default focus", async () => {
