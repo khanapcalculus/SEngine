@@ -29,6 +29,7 @@ import {
   miniBtn,
   labelStyle,
   errStyle,
+  successStyle,
   formGrid,
   fmtErr,
 } from "../_components/ui";
@@ -300,6 +301,7 @@ function DerivationPanel({
   const [result, setResult] = useState<{
     derivation: string;
     model: string;
+    saved: boolean;
   } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -337,7 +339,7 @@ function DerivationPanel({
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) return setErr(fmtErr(d) + " (is GEMMA_API_KEY configured?)");
-      setResult({ derivation: d.derivation, model: d.model });
+      setResult({ derivation: d.derivation, model: d.model, saved: !!d.saved });
     } catch {
       setErr("An unexpected error occurred. Please try again.");
     } finally {
@@ -379,6 +381,15 @@ function DerivationPanel({
         {result && (
           <div>
             <p style={{ ...dim, margin: "4px 0" }}>Model: {result.model}</p>
+            {result.saved ? (
+              <p style={{ ...successStyle, margin: "0 0 8px" }} role="status">
+                ✓ Saved to the class discussion — students can review it anytime.
+              </p>
+            ) : (
+              <p style={{ ...dim, margin: "0 0 8px", color: "#ffcf8f" }}>
+                Generated, but couldn’t be saved to the class discussion.
+              </p>
+            )}
             <MathText text={result.derivation} />
           </div>
         )}

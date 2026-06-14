@@ -4,7 +4,7 @@
  * Threads belong to a class (optionally tied to an assignment); posts thread via
  * parent_post_id. Any class member (assertClassAccess) may read and post.
  */
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { DB } from "../../db/client";
 import {
   discussionThreads,
@@ -198,5 +198,91 @@ export async function addPost(
     });
 
     return { postId: post.id, threadId };
+  });
+}
+
+/** Title of the single per-class thread that collects AI-generated derivations. */
+export const AI_DERIVATIONS_THREAD_TITLE = "AI Derivations (Gemma)";
+
+export interface SaveDerivationInput {
+  classId: string;
+  /** The problem / whiteboard context the derivation was generated from. */
+  problem: string;
+  derivation: string;
+  model: string;
+}
+
+/** Render the persisted post body (kept as text; LaTeX is preserved verbatim). */
+export function formatDerivationBody(input: SaveDerivationInput): string {
+  return [
+    `**AI derivation** (model: ${input.model})`,
+    "",
+    "**Problem / board context:**",
+    input.problem,
+    "",
+    "**Derivation:**",
+    input.derivation,
+  ].join("\n");
+}
+
+/**
+ * Persist an AI derivation into the class discussion so it stays visible to
+ * students. Find-or-creates ONE per-class "AI Derivations" thread and appends
+ * the derivation as a post. Caller must be a member of the class. Thread + post
+ * + audit commit together.
+ */
+export async function appendAiDerivation(
+  db: DB,
+  ctx: AuthContext,
+  input: SaveDerivationInput,
+): Promise<{ threadId: string; postId: string; createdThread: boolean }> {
+  return db.transaction(async (tx) => {
+    const access = await assertClassAccess(tx, ctx, input.classId);
+
+    let createdThread = false;
+    let [thread] = await tx
+      .select({ id: discussionThreads.id })
+      .from(discussionThreads)
+      .where(
+        and(
+          eq(discussionThreads.classId, input.classId),
+          eq(discussionThreads.title, AI_DERIVATIONS_THREAD_TITLE),
+        ),
+      )
+      .limit(1);
+
+    if (!thread) {
+      [thread] = await tx
+        .insert(discussionThreads)
+        .values({
+          classId: input.classId,
+          assignmentId: null,
+          authorId: ctx.userId,
+          title: AI_DERIVATIONS_THREAD_TITLE,
+        })
+        .returning({ id: discussionThreads.id });
+      createdThread = true;
+    }
+
+    const [post] = await tx
+      .insert(discussionPosts)
+      .values({
+        threadId: thread.id,
+        authorId: ctx.userId,
+        body: formatDerivationBody(input),
+      })
+      .returning({ id: discussionPosts.id });
+
+    await writeAudit(tx, {
+      actorId: ctx.userId,
+      orgId: ctx.orgId,
+      branchId: access.branchId,
+      action: "discussion.derivation.save",
+      entityType: "discussion_post",
+      entityId: post.id,
+      summary: `Saved AI derivation to class ${input.classId}`,
+    });
+
+    return { threadId: thread.id, postId: post.id, createdThread };
   });
 }
