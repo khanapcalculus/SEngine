@@ -98,6 +98,23 @@ interface InboundFrame {
   error?: string;
 }
 
+/**
+ * Coerce a server-provided ws URL to an absolute WebSocket scheme. Defensive:
+ * if the token route returns a scheme-less host (a stale deploy, or a
+ * WHITEBOARD_WS_URL set without "wss://"), the browser would otherwise resolve
+ * it RELATIVE to the page origin and dial the wrong host
+ * (e.g. wss://app.vercel.app/dashboard/<host>/room/...). Mirrors the
+ * normalization the token route does server-side, so the client works even if
+ * the two are briefly out of sync.
+ */
+export function toAbsoluteWsUrl(wsUrl: string): string {
+  const u = wsUrl.trim();
+  if (/^wss?:\/\//i.test(u)) return u;
+  if (/^https:\/\//i.test(u)) return u.replace(/^https:\/\//i, "wss://");
+  if (/^http:\/\//i.test(u)) return u.replace(/^http:\/\//i, "ws://");
+  return `wss://${u.replace(/^\/+/, "")}`;
+}
+
 function initialState(): WhiteboardState {
   return {
     status: "idle",
@@ -161,7 +178,7 @@ export class WhiteboardConnection {
 
     this.setState({ canDraw: tok.canDraw, role: tok.role });
 
-    const url = `${tok.wsUrl}?t=${encodeURIComponent(tok.token)}`;
+    const url = `${toAbsoluteWsUrl(tok.wsUrl)}?t=${encodeURIComponent(tok.token)}`;
     let sock: SocketLike;
     try {
       sock = this.deps.createSocket(url);

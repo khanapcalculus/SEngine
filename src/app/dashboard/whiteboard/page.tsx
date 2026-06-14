@@ -87,8 +87,12 @@ export default function WhiteboardPage() {
                 }),
               )
             : (Array.isArray(d.classes) ? d.classes : []).map(
-                (c: { id: string; subject?: string; term?: string }) => ({
-                  id: c.id,
+                // /api/me/classes returns rows keyed `classId` (classes.id aliased
+                // in listClassesForStaffUser), NOT `id`. Reading `c.id` here left
+                // every option value undefined, so the browser used the option's
+                // text as its value and a non-UUID label reached the token route.
+                (c: { classId: string; subject?: string; term?: string }) => ({
+                  id: c.classId,
                   label: `${c.subject ?? "Class"}${c.term ? ` (${c.term})` : ""}`,
                 }),
               );

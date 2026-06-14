@@ -19,7 +19,7 @@ class_name = "WhiteboardRoom"
 # board is persisted to DO storage.
 [[migrations]]
 tag = "v1"
-new_classes = ["WhiteboardRoom"]
+new_sqlite_classes = ["WhiteboardRoom"]
 
 # Secrets (set via `wrangler secret put`, never committed):
 #   RTC_JWT_SECRET  — MUST match the Vercel app's RTC_JWT_SECRET.

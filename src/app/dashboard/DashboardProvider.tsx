@@ -108,8 +108,13 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       const r = await fetch(url);
       return r.ok ? r.json() : null;
     };
+    // The staff roster and audit log are manager-only endpoints (they 403 for a
+    // teacher). Gate their fetches on role so a lower-privilege session never
+    // fires a request the server is bound to reject — the other four branch
+    // datasets allow teachers, so they always load.
+    const managerView = isManager(role);
     const [s, st, c, asg, enr] = await Promise.all([
-      get(`/api/staff/branch/${bid}`),
+      managerView ? get(`/api/staff/branch/${bid}`) : Promise.resolve(null),
       get(`/api/students/branch/${bid}`),
       get(`/api/classes/branch/${bid}`),
       get(`/api/staff/assignments/branch/${bid}`),
@@ -120,7 +125,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     setClasses(Array.isArray(c?.classes) ? c.classes : []);
     setAssignments(Array.isArray(asg?.assignments) ? asg.assignments : []);
     setEnrollments(Array.isArray(enr?.enrollments) ? enr.enrollments : []);
-    if (isManager(role)) {
+    if (managerView) {
       const a = await get(`/api/audit/branch/${bid}`);
       setAudit(Array.isArray(a?.entries) ? a.entries : []);
     } else {

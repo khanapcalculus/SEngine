@@ -57,14 +57,31 @@ function getRtcSecret(): string {
 
 /** Base URL of the deployed whiteboard Worker, e.g. wss://rtc.sengine.app. */
 function getWhiteboardWsBase(): string {
-  const base = process.env.WHITEBOARD_WS_URL;
-  if (!base) {
+  const raw = process.env.WHITEBOARD_WS_URL;
+  if (!raw) {
     console.error(
       "[classroom/token] WHITEBOARD_WS_URL is undefined; cannot build the room URL.",
     );
     throw new AuthError(401, "RTC endpoint is not configured");
   }
-  return base.replace(/\/$/, "");
+
+  let base = raw.trim().replace(/\/+$/, "");
+  // Normalize to an absolute WebSocket scheme. A scheme-less value (e.g.
+  // "rtc.example.workers.dev") would be resolved by the browser RELATIVE to the
+  // page origin — connecting to the wrong host — so coerce it to wss://. An
+  // http(s):// value is mapped to its WebSocket equivalent for convenience.
+  if (/^https:\/\//i.test(base)) {
+    base = base.replace(/^https:\/\//i, "wss://");
+  } else if (/^http:\/\//i.test(base)) {
+    base = base.replace(/^http:\/\//i, "ws://");
+  } else if (!/^wss?:\/\//i.test(base)) {
+    console.warn(
+      `[classroom/token] WHITEBOARD_WS_URL has no scheme; assuming wss:// for "${base}". ` +
+        "Set it as wss://<host> to silence this.",
+    );
+    base = `wss://${base}`;
+  }
+  return base;
 }
 
 export async function POST(req: Request): Promise<Response> {
