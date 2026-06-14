@@ -5,8 +5,16 @@
  * giving every participant a single authoritative coordination point at the
  * edge. Responsibilities:
  *  - accept WebSocket upgrades and track connected peers,
- *  - broadcast whiteboard ops (strokes, shapes, equations) to everyone else,
+ *  - stamp each op with the SERVER-verified sender identity + timestamp,
+ *  - broadcast whiteboard ops (strokes, shapes, equations, cursors) to peers,
  *  - keep a bounded in-memory log of recent ops so a late joiner can catch up.
+ *
+ * Identity: the fronting Worker verifies the RTC handshake token and forwards
+ * the caller's user id in the `x-rtc-user-id` header (the socket itself carries
+ * no session). We persist that id on the connection via the Hibernation
+ * attachment API so it survives the socket hibernating, then stamp every inbound
+ * op's `senderId` from it — never from client-supplied fields (Guideline #4).
+ * This is what lets the client attribute cursors/strokes to specific peers.
  *
  * Uses the Hibernation WebSocket API (acceptWebSocket) so idle sessions don't
  * bill for wall-clock time. No frontend canvas here (per the constraint) — this
@@ -23,12 +31,26 @@ interface Env {
   [key: string]: unknown;
 }
 
+/**
+ * The Hibernation attachment + identity surface we use on a socket. The runtime
+ * WebSocket provides serialize/deserializeAttachment; we narrow to what we need.
+ */
+interface IdentifiedSocket extends WebSocket {
+  serializeAttachment(value: unknown): void;
+  deserializeAttachment(): unknown;
+}
+
+/** What we persist per connection so it survives hibernation. */
+interface SocketAttachment {
+  userId: string | null;
+}
+
 /** A single whiteboard operation broadcast between peers. */
 export interface WhiteboardOp {
   type: "stroke" | "shape" | "equation" | "clear" | "cursor";
   /** Opaque payload produced by the client canvas. */
   payload: unknown;
-  /** Set server-side from the connection, never trusted from the client. */
+  /** Set server-side from the verified connection, never trusted from the client. */
   senderId?: string;
   ts?: number;
 }
@@ -49,18 +71,27 @@ export class WhiteboardRoom {
   /**
    * Entry point. Expects a WebSocket upgrade; rejects anything else.
    * Auth/RBAC is enforced at the Worker BEFORE the request is routed here
-   * (the DO trusts only an already-verified, signed connection).
+   * (the DO trusts only an already-verified, signed connection). The Worker
+   * passes the verified user id in `x-rtc-user-id`.
    */
   async fetch(req: Request): Promise<Response> {
     if (req.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 
+    // Identity comes from the Worker's trusted internal header, not the client.
+    const userId = req.headers.get("x-rtc-user-id");
+
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
 
     // Hibernation API: runtime manages the socket; handlers below fire on wake.
     this.state.acceptWebSocket(server);
+
+    // Persist the identity on the connection so webSocketMessage can stamp
+    // senderId even after the socket has hibernated and woken.
+    const attachment: SocketAttachment = { userId: userId ?? null };
+    (server as IdentifiedSocket).serializeAttachment(attachment);
 
     // Replay recent history so the joiner sees the current board state.
     if (this.history.length > 0) {
@@ -90,7 +121,8 @@ export class WhiteboardRoom {
       return;
     }
 
-    // Stamp server-side; never trust client-provided timestamps/identity.
+    // Stamp identity + time server-side; never trust client-provided values.
+    op.senderId = this.senderIdOf(ws);
     op.ts = Date.now();
 
     this.appendHistory(op);
@@ -111,6 +143,18 @@ export class WhiteboardRoom {
       ws.close(1011, "socket error");
     } catch {
       /* noop */
+    }
+  }
+
+  /** Read the verified user id persisted on the connection (undefined if none). */
+  private senderIdOf(ws: WebSocket): string | undefined {
+    try {
+      const att = (ws as IdentifiedSocket).deserializeAttachment() as
+        | SocketAttachment
+        | null;
+      return att?.userId ?? undefined;
+    } catch {
+      return undefined;
     }
   }
 
