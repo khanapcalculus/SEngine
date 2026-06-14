@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { useDashboard } from "../DashboardProvider";
 import { RoleGuard } from "../_components/RoleGuard";
-import { Gradebook } from "../_components/forms";
+import { CreateClassForm, Gradebook } from "../_components/forms";
 import { Section, dim, warnStyle } from "../_components/ui";
 
 export default function AcademicsPage() {
@@ -16,6 +16,8 @@ export default function AcademicsPage() {
       {!scope.branchId && (
         <p style={warnStyle}>Select a branch to load the gradebook.</p>
       )}
+
+      <CreateClassForm scope={scope} onDone={flash} />
 
       <Section title="Classrooms">
         {classes.length === 0 ? (

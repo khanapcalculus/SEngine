@@ -45,7 +45,11 @@ const DRAW_ROLES: ReadonlySet<Role> = new Set<Role>([
 function getRtcSecret(): string {
   const secret = process.env.RTC_JWT_SECRET;
   if (!secret || secret.length < 16) {
-    // Fail closed: never mint a token we can't securely sign.
+    // Fail closed: never mint a token we can't securely sign. Log so the cause
+    // is unambiguous in production (a misconfigured env var, not a bad payload).
+    console.error(
+      "[classroom/token] RTC_JWT_SECRET missing or too short (<16 chars); refusing to mint token.",
+    );
     throw new AuthError(401, "RTC is not configured");
   }
   return secret;
@@ -54,7 +58,12 @@ function getRtcSecret(): string {
 /** Base URL of the deployed whiteboard Worker, e.g. wss://rtc.sengine.app. */
 function getWhiteboardWsBase(): string {
   const base = process.env.WHITEBOARD_WS_URL;
-  if (!base) throw new AuthError(401, "RTC endpoint is not configured");
+  if (!base) {
+    console.error(
+      "[classroom/token] WHITEBOARD_WS_URL is undefined; cannot build the room URL.",
+    );
+    throw new AuthError(401, "RTC endpoint is not configured");
+  }
   return base.replace(/\/$/, "");
 }
 
@@ -66,9 +75,23 @@ export async function POST(req: Request): Promise<Response> {
     try {
       raw = await req.json();
     } catch {
+      console.error("[classroom/token] Malformed JSON body in handshake POST.");
       return json({ error: "Malformed JSON body" }, 400);
     }
-    const { classId } = parseClassroomToken(raw);
+    // parseClassroomToken throws ValidationError(400) when classId isn't a UUID.
+    // This is the ONLY route-level source of a 400 once the body is valid JSON —
+    // log it so a production 400 points at the actual offending value, rather
+    // than being mistaken for an env-var misconfiguration (those fail as 401).
+    let classId: string;
+    try {
+      ({ classId } = parseClassroomToken(raw));
+    } catch (err) {
+      console.error(
+        "[classroom/token] classId failed validation:",
+        err instanceof Error ? err.message : err,
+      );
+      throw err;
+    }
 
     // Throws 403 if the caller isn't a member of this class, 404 if missing.
     const access = await assertClassAccess(getDb(), ctx, classId);

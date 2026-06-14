@@ -1,0 +1,19 @@
+PROJECT STATUS UPDATE
+Project: SEngine — multi-tenant School ERP/LMS. 
+Stack: Next.js (App Router) + TypeScript, Drizzle ORM, Neon Postgres, Vercel, Cloudflare Workers/Durable Objects.
+
+Current State: 
+- Modules 1-4 and Phase E (RTC Whiteboard + Gemma 4 AI Copilot) are 100% complete and merged to master. 
+- All RTC cursor attribution, KaTeX rendering, and discussion persistence are finished. 
+- Typecheck is clean, 284 tests are passing.
+
+Next Task: Monetization (Stripe Billing Integration)
+We are shifting to build the Stripe Billing engine for the Super Admin to manage branch subscriptions. 
+
+Architecture & Specs:
+1. Flow: We are using Stripe Checkout + Customer Portal (no custom Stripe Elements). This is required to natively handle the RBI e-mandate rules for our Indian branches alongside international payments.
+2. Pricing: MVP is a single flat recurring price per branch. Do not build multi-tier logic yet.
+3. Database: The subscription should link via a clean foreign key to our existing `branches` table.
+
+Instructions:
+Please scaffold the backend for this Stripe integration. Generate the Next.js routes (`/api/stripe/checkout` and `/api/stripe/webhook`) and the Drizzle migration (`0007_add_subscriptions.sql`). Wait for my review before building the frontend UI.

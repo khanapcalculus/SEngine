@@ -18,9 +18,19 @@ import {
   type WhiteboardState,
 } from "./connection";
 
+/** Canonical 8-4-4-4-12 hex UUID shape (mirrors the server's validation). */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function browserDeps(): ConnectionDeps {
   return {
     fetchToken: async (classId: string): Promise<ClassroomToken> => {
+      // Guard at the source: a non-UUID classId (e.g. an empty selection) would
+      // otherwise hit the server only to come back as a 400. Fail fast with a
+      // clear message instead of a generic "Could not join" from the route.
+      if (!UUID_RE.test(classId)) {
+        throw new Error("Select a class before joining the whiteboard.");
+      }
       const res = await fetch("/api/me/classroom/token", {
         method: "POST",
         headers: { "content-type": "application/json" },

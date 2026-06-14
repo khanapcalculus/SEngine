@@ -1,0 +1,57 @@
+"Our backend MVP and authentication flow are working, but our frontend dashboard is currently a 'one-size-fits-all' layout. Right now, a logged-in Tutor can see Super Admin features like staff termination UI.
+
+Please implement strict Role-Based Access Control (RBAC) on the frontend layout and verify the backend API guards.
+
+Step 1: Define the Role Matrix
+Update our navigation sidebar and dashboard routing to strictly enforce these distinct views:
+
+Role: Super Admin
+
+Access: Global Everything.
+
+Dashboard: Global metrics, cross-tenant organization management, platform settings, and full access to all branch data.
+
+Role: Branch Admin / Manager
+
+Access: Restricted to their specific branchId.
+
+Dashboard: Branch analytics, HR/Staff onboarding & termination (only for their branch), student enrollment, and class scheduling.
+
+Restrictions: Cannot see global platform settings or other branches.
+
+Role: Tutor / Teacher
+
+Access: Academic only.
+
+Dashboard: My Schedule, Assigned Classes, Gradebook, and the RTC Whiteboard.
+
+Restrictions: NO access to HR, staff management, global settings, or viewing students outside their assigned classes.
+
+Role: Student
+
+Access: Personal academic view only.
+
+Dashboard: My Enrollments, My Transcript, and the RTC Whiteboard.
+
+Restrictions: NO access to grading, staff tools, or other students' data.
+
+Step 2: Build the UI Guards
+Please create a RoleGuard wrapper component or update our Next.js layouts to conditionally render sidebar links and page components based on the user's role. If a Tutor manually navigates to /dashboard/hr, the UI should intercept and show a '403 Unauthorized' component.
+
+Step 3: Secure the APIs
+Double-check the core API routes (specifically staff termination and org management) to ensure that even if a user bypasses the frontend, the backend middleware strictly rejects unauthorized roles.
+
+Please write the code to implement this frontend architectural update."
+
+What to Expect the AI to Build
+Once you send this, the AI will likely generate three critical pieces of code:
+
+Navigation Configuration: It will refactor your sidebar menu into an array where each link has an allowedRoles: ['super_admin', 'branch_admin'] property. The sidebar will filter itself before rendering so a Tutor never even sees the HR buttons.
+
+Layout Protection: It will wrap your high-level Next.js pages in an authorization check. If a student tries to be clever and types /dashboard/staff into the URL bar, the system will instantly kick them back to their own home page.
+
+API Verification: It will review the backend code to ensure your endpoints are also checking the req.user.role before executing database commands.
+
+Once the AI finishes generating this, you can deploy it to Vercel and log back in as your Test Tutor. The screen should instantly transform, hiding all the dangerous HR and organization controls!
+
+Before we trigger this massive layout update, how are you currently storing the user's session state on the frontend—are you using standard JWT cookies, NextAuth/Auth.js, or something custom the AI built earlier?

@@ -1,0 +1,29 @@
+PROJECT CRITICAL BUG FIX & ASSEMBLY
+Project: SEngine (Multi-tenant ERP/LMS)
+Target Environment: Production (Vercel)
+Current Blockers: 
+1. Missing Classroom Creation UI in the dashboard view.
+2. Production Crash: POST /api/me/classroom/token returning 400 (Bad Request).
+
+DIAGNOSIS & CONTEXT FOR THE AI:
+- The database schema is fully updated and synced via Drizzle.
+- The Git HEAD is currently at commit 91fcd90 (Gemma 4 derivation route backend).
+- The 400 error indicates a payload validation failure or missing runtime environment variables (such as JWT secrets, Cloudflare worker endpoints, or tenant identifiers) within the Vercel production context.
+
+INSTRUCTIONS:
+
+Step 1: Debug and Fix the /api/me/classroom/token Route
+1. Review the Zod validation schema inside `src/app/api/me/classroom/token/route.ts` (or your equivalent path).
+2. Ensure that it gracefully handles missing environment variables or provides clear console logs if `process.env.RTC_JWT_SECRET` or any external signaling tokens are undefined at runtime.
+3. If the payload expects a `classroomId` or `roomName`, ensure the client component is passing it correctly within the POST body during the whiteboard handshake initiation.
+
+Step 2: Implement the Classroom Creation UI
+1. Inspect `src/app/dashboard/lms/page.tsx` (or your main LMS workspace file). 
+2. Verify if the "Create New Classroom/Section" interactive button and modal form are present for authorized roles (Super Admin / Branch Manager). 
+3. If missing or only stubbed, implement the stateful form to POST to our existing backend classroom creation endpoints, ensuring it assigns the correct `tenant_id` or `branch_id` from the current user session.
+
+Step 3: Unify and Verify Local Changes
+1. Run a comprehensive project-wide typecheck (`npm run build` or `npx tsc --noEmit`) to catch any disconnected imports caused by the recent `<MathText>` and `math-segments.ts` component relocations.
+2. Clean up any uncommitted files on master by creating a clean feature branch named `feature/classroom-system-fix` and perform a clean `--no-ff` merge back into master.
+
+Do not start writing any code until you have inspected the token route file and the LMS view component to pinpoint why the payload mismatch or UI omission is occurring. Present your analysis first.
