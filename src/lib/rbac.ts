@@ -34,6 +34,11 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Organizations",
     allowedRoles: ["super_admin"],
   },
+  {
+    href: "/dashboard/users",
+    label: "User Management",
+    allowedRoles: ["super_admin"],
+  },
   { href: "/dashboard/staff", label: "Staff (HR)", allowedRoles: MANAGERS },
   { href: "/dashboard/students", label: "Students", allowedRoles: MANAGERS },
   { href: "/dashboard/academics", label: "Gradebook", allowedRoles: MANAGERS },

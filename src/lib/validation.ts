@@ -249,6 +249,45 @@ export function parseResetPassword(body: unknown): ResetPasswordInput {
   return { userId: b.userId as string, newPassword };
 }
 
+export interface UpdateUserProfileInput {
+  fullName?: string;
+  email?: string;
+}
+
+/**
+ * Validate the PATCH /api/admin/users/[userId] body. A partial update: at least
+ * one of fullName/email must be present, and any provided field must be valid.
+ */
+export function parseUpdateUserProfile(body: unknown): UpdateUserProfileInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+  const out: UpdateUserProfileInput = {};
+
+  if (b.fullName !== undefined) {
+    const fullName = typeof b.fullName === "string" ? b.fullName.trim() : "";
+    if (fullName.length < 1 || fullName.length > 255)
+      fields.fullName = "fullName must be 1-255 chars";
+    else out.fullName = fullName;
+  }
+
+  if (b.email !== undefined) {
+    const email = typeof b.email === "string" ? b.email.trim() : "";
+    if (!EMAIL_RE.test(email) || email.length > 320)
+      fields.email = "valid email required";
+    else out.email = email;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  if (out.fullName === undefined && out.email === undefined)
+    throw new ValidationError("Nothing to update", {
+      _: "provide fullName and/or email",
+    });
+
+  return out;
+}
+
 export interface CreateClassInput {
   subject: string;
   term: string;
@@ -588,6 +627,24 @@ export function parseCreatePost(body: unknown): CreatePostInput {
     throw new ValidationError("Invalid request body", fields);
 
   return { body: text, parentPostId };
+}
+
+export interface ClassroomTokenInput {
+  /** The class whose live whiteboard the caller wants to connect to. */
+  classId: string;
+}
+
+/** Validate the POST /api/me/classroom/token body. */
+export function parseClassroomToken(body: unknown): ClassroomTokenInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.classId)) fields.classId = "classId must be a UUID";
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { classId: b.classId as string };
 }
 
 export interface CreateOrganizationInput {

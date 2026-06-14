@@ -37,6 +37,7 @@
   ],
   "exclude": [
     "node_modules",
+    "worker",
     "src/modules/lms/whiteboard.do.ts",
     "src/modules/lms/whiteboard.do.test.ts"
   ]
