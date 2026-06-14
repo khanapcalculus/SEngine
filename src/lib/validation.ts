@@ -202,6 +202,40 @@ export function parseTutorCopilot(body: unknown): TutorCopilotInput {
   return { query, classId: b.classId as string, whiteboardContext };
 }
 
+export interface DerivationInput {
+  /** Class whose live whiteboard the derivation is scoped to. */
+  classId: string;
+  /** Snapshot of the board the educator wants derived (OCR'd math/text). */
+  whiteboardContext: string;
+  /** Optional focus, e.g. "just the integration-by-parts step". */
+  prompt?: string;
+}
+
+/** Validate the POST /api/me/ai/derivation body. */
+export function parseDerivation(body: unknown): DerivationInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.classId)) fields.classId = "classId must be a UUID";
+
+  const whiteboardContext =
+    typeof b.whiteboardContext === "string" ? b.whiteboardContext.trim() : "";
+  if (whiteboardContext.length < 1 || whiteboardContext.length > MAX_CONTEXT)
+    fields.whiteboardContext = `whiteboardContext required (1-${MAX_CONTEXT} chars)`;
+
+  let prompt: string | undefined;
+  if (b.prompt !== undefined) {
+    if (typeof b.prompt !== "string" || b.prompt.length > MAX_QUERY)
+      fields.prompt = `prompt must be a string (<=${MAX_QUERY} chars)`;
+    else prompt = b.prompt.trim() || undefined;
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { classId: b.classId as string, whiteboardContext, prompt };
+}
+
 export interface LoginInput {
   email: string;
   password: string;
