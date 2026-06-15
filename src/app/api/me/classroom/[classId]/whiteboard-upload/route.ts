@@ -1,17 +1,20 @@
 /**
  * POST /api/me/classroom/[classId]/whiteboard-upload
  *
- * Vercel Blob client-upload handshake for whiteboard image inserts. Mirrors the
- * submissions upload route but scopes authorization to CLASS MEMBERSHIP + draw
- * capability instead of submission ownership. The browser uploads bytes DIRECTLY
- * to Blob; they never pass through this function.
+ * Server-side Vercel Blob upload for whiteboard image inserts. The browser POSTs
+ * the raw file bytes to THIS route (multipart/form-data), and we upload to Blob
+ * with put(). We deliberately do NOT use the client-upload handshake
+ * (@vercel/blob/client): that makes the browser PUT directly to Vercel's Blob
+ * API, which was being rejected (400/CORS) in this deployment. Routing the bytes
+ * through our Node function is robust and keeps the same RBAC.
  *
- * Images only: PDFs are rasterized to PNG client-side before upload, so the
- * server never receives a PDF here. Needs BLOB_READ_WRITE_TOKEN in the env.
- * The Durable Object op log is the source of truth for what's on the board, so
- * there is no DB record to write on completion.
+ * Authorization: class membership + a draw-capable role (mirrors the RTC token
+ * route). Images only — PDFs are rasterized to PNG client-side before upload, so
+ * the server never receives a PDF here. Needs BLOB_READ_WRITE_TOKEN in the env.
+ * The Durable Object op log is the source of truth for the board, so there's no
+ * DB record to write.
  */
-import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
+import { put } from "@vercel/blob";
 import { getDb } from "../../../../../../db/client";
 import {
   getAuthContext,
@@ -41,28 +44,18 @@ export async function POST(
       return json({ error: "classId must be a UUID" }, 400);
     }
 
-    // Fail loud and clear about Blob storage config. We distinguish three cases
-    // so the message is actionable instead of the SDK's generic failure:
-    //   - missing entirely  → no store linked
-    //   - present but malformed (not vercel_blob_rw_…) → a bad hand-pasted value
-    //   - present and well-formed → let the SDK use it (a remaining failure is
-    //     then a real store/permission problem, surfaced via handleError)
+    // Blob config must be present and well-formed (a hand-pasted value with
+    // quotes/whitespace, or a non-rw token, fails opaquely deep in the SDK).
     const blobToken = process.env.BLOB_READ_WRITE_TOKEN?.trim();
     if (!blobToken) {
-      console.error(
-        "[whiteboard-upload] BLOB_READ_WRITE_TOKEN is undefined; link a Vercel Blob store to the project.",
-      );
+      console.error("[whiteboard-upload] BLOB_READ_WRITE_TOKEN is undefined.");
       return json(
         { error: "Image storage is not configured (BLOB_READ_WRITE_TOKEN missing)." },
         503,
       );
     }
     if (!blobToken.startsWith("vercel_blob_rw_")) {
-      console.error(
-        "[whiteboard-upload] BLOB_READ_WRITE_TOKEN is set but malformed " +
-          "(must start with 'vercel_blob_rw_'). Re-connect the Blob store so " +
-          "Vercel writes the correct value, rather than pasting it by hand.",
-      );
+      console.error("[whiteboard-upload] BLOB_READ_WRITE_TOKEN is malformed.");
       return json(
         {
           error:
@@ -72,25 +65,36 @@ export async function POST(
       );
     }
 
-    const body = (await req.json()) as HandleUploadBody;
-    const result = await handleUpload({
-      body,
-      request: req,
-      onBeforeGenerateToken: async () => {
-        // Authorize: the caller must be a member of this class AND a draw role.
-        await assertClassAccess(getDb(), ctx, classId);
-        requireRole(ctx, DRAW_ROLES);
-        return {
-          allowedContentTypes: ALLOWED_CONTENT_TYPES,
-          maximumSizeInBytes: MAX_BYTES,
-          tokenPayload: JSON.stringify({ classId, userId: ctx.userId }),
-        };
-      },
-      // No DB record: the whiteboard DO op log owns board state. Hook left as a
-      // no-op (a future audit-log write could live here).
-      onUploadCompleted: async () => {},
+    // Authorize: class member + draw role.
+    await assertClassAccess(getDb(), ctx, classId);
+    requireRole(ctx, DRAW_ROLES);
+
+    // Read the file from multipart form data.
+    const form = await req.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) {
+      return json({ error: "Expected a 'file' field with the image." }, 400);
+    }
+    if (!ALLOWED_CONTENT_TYPES.includes(file.type)) {
+      return json(
+        { error: `Unsupported image type "${file.type}". Use PNG or JPEG.` },
+        415,
+      );
+    }
+    if (file.size > MAX_BYTES) {
+      return json({ error: "Image exceeds the 20 MB limit." }, 413);
+    }
+
+    // Namespace by class; randomSuffix avoids collisions on identical filenames.
+    const safeName = file.name.replace(/[^\w.\-]+/g, "_") || "image.png";
+    const blob = await put(`whiteboard/${classId}/${safeName}`, file, {
+      access: "public",
+      contentType: file.type,
+      addRandomSuffix: true,
+      token: blobToken,
     });
-    return json(result);
+
+    return json({ url: blob.url });
   } catch (err) {
     return handleError(err);
   }

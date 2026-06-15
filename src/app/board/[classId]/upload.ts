@@ -1,12 +1,12 @@
 /**
  * Client upload helpers for whiteboard image/PDF inserts.
  *
- * Thin wrapper over @vercel/blob/client's `upload()` (the same client-upload
- * handshake the submissions feature uses), pointed at the class-scoped board
- * route. The route mints a short-lived, access-checked token; the file goes
- * straight to Blob storage and we get back a public URL to put in an image op.
+ * The browser POSTs the file (multipart/form-data) to our class-scoped route,
+ * which uploads to Vercel Blob server-side and returns the public URL. We do NOT
+ * use @vercel/blob/client's direct browser→Blob handshake — that PUT to Vercel's
+ * Blob API was rejected (400/CORS) in this deployment, so routing bytes through
+ * our own Node function is the robust path.
  */
-import { upload } from "@vercel/blob/client";
 
 /** Upload one image blob for a class board; resolves to its public URL. */
 export async function uploadBoardImage(
@@ -14,11 +14,19 @@ export async function uploadBoardImage(
   blob: Blob,
   filename: string,
 ): Promise<string> {
-  const result = await upload(filename, blob, {
-    access: "public",
-    handleUploadUrl: `/api/me/classroom/${classId}/whiteboard-upload`,
+  const form = new FormData();
+  // Name the part "file" (the route reads form.get("file")). Provide a filename.
+  form.append("file", blob, filename);
+
+  const res = await fetch(`/api/me/classroom/${classId}/whiteboard-upload`, {
+    method: "POST",
+    body: form,
   });
-  return result.url;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || typeof data.url !== "string") {
+    throw new Error(data.error ?? `Upload failed (HTTP ${res.status})`);
+  }
+  return data.url;
 }
 
 /** Natural pixel dimensions of an image blob (for aspect-correct placement). */
