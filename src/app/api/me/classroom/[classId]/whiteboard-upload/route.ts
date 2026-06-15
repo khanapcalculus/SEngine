@@ -87,15 +87,23 @@ export async function POST(
 
     // Namespace by class; randomSuffix avoids collisions on identical filenames.
     const safeName = file.name.replace(/[^\w.\-]+/g, "_") || "image.png";
-    const blob = await put(`whiteboard/${classId}/${safeName}`, file, {
-      access: "public",
-      contentType: file.type,
-      addRandomSuffix: true,
-      token: blobToken,
-    });
-
-    return json({ url: blob.url });
+    try {
+      const blob = await put(`whiteboard/${classId}/${safeName}`, file, {
+        access: "public",
+        contentType: file.type,
+        addRandomSuffix: true,
+        token: blobToken,
+      });
+      return json({ url: blob.url });
+    } catch (putErr) {
+      // Surface the real Blob error instead of a generic 500 — this is the
+      // boundary we've been blind to. Logged to the Vercel function logs too.
+      const detail = putErr instanceof Error ? putErr.message : String(putErr);
+      console.error("[whiteboard-upload] put() failed:", detail, putErr);
+      return json({ error: `Blob upload failed: ${detail}` }, 502);
+    }
   } catch (err) {
+    console.error("[whiteboard-upload] request failed:", err);
     return handleError(err);
   }
 }
