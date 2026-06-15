@@ -77,12 +77,10 @@ const newId = () => crypto.randomUUID();
 
 /** Best-effort human message from an upload failure (Blob client throws Error). */
 function uploadErr(err: unknown): string {
+  // The route already returns clear, specific messages (missing/malformed token,
+  // unsupported type, the real Blob put() error, …). Pass them straight through
+  // rather than rewriting — earlier masking here hid the true cause.
   const msg = err instanceof Error ? err.message : String(err);
-  // The Blob client surfaces the route's JSON error in its message; if it
-  // mentions the token, give the actionable hint.
-  if (/BLOB_READ_WRITE_TOKEN|not configured|store/i.test(msg)) {
-    return "image storage isn't configured on the server yet.";
-  }
   return msg || "unknown error";
 }
 
