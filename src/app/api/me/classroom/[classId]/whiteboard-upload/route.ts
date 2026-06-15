@@ -41,15 +41,33 @@ export async function POST(
       return json({ error: "classId must be a UUID" }, 400);
     }
 
-    // Fail loud and clear if Blob storage isn't provisioned. Without this the
-    // handshake throws a generic 500 that surfaces to the user as a confusing
-    // "upload failed" — a missing store is the single most common cause.
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    // Fail loud and clear about Blob storage config. We distinguish three cases
+    // so the message is actionable instead of the SDK's generic failure:
+    //   - missing entirely  → no store linked
+    //   - present but malformed (not vercel_blob_rw_…) → a bad hand-pasted value
+    //   - present and well-formed → let the SDK use it (a remaining failure is
+    //     then a real store/permission problem, surfaced via handleError)
+    const blobToken = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+    if (!blobToken) {
       console.error(
         "[whiteboard-upload] BLOB_READ_WRITE_TOKEN is undefined; link a Vercel Blob store to the project.",
       );
       return json(
         { error: "Image storage is not configured (BLOB_READ_WRITE_TOKEN missing)." },
+        503,
+      );
+    }
+    if (!blobToken.startsWith("vercel_blob_rw_")) {
+      console.error(
+        "[whiteboard-upload] BLOB_READ_WRITE_TOKEN is set but malformed " +
+          "(must start with 'vercel_blob_rw_'). Re-connect the Blob store so " +
+          "Vercel writes the correct value, rather than pasting it by hand.",
+      );
+      return json(
+        {
+          error:
+            "Image storage token looks malformed. Re-connect the Vercel Blob store to the project (don't paste the token by hand).",
+        },
         503,
       );
     }
