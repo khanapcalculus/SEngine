@@ -31,6 +31,7 @@ interface AttendanceRow { id: string; date: string; status: string; notes: strin
 interface PayrollRow {
   id: string; periodStart: string; periodEnd: string; grossAmount: string;
   deductions: string; netAmount: string; currency: string; status: string; paidAt: string | null;
+  sessionsWorked?: number | null; hoursWorked?: string | null; hourlyRate?: string | null;
 }
 interface ReviewRow { id: string; reviewDate: string; rating: number; summary: string }
 interface DocumentRow { id: string; category: string; fileName: string; contentType: string | null; url: string }
@@ -44,7 +45,7 @@ export default function HrPage() {
 }
 
 function HrInner() {
-  const { scope, staff } = useDashboard();
+  const { scope, staff, reload } = useDashboard();
   const branchId = scope.branchId;
   const [staffId, setStaffId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -116,6 +117,14 @@ function HrInner() {
             </select>
           </label>
 
+          <CompensationPanel
+            key={staffId}
+            staffId={staffId}
+            currentRate={staff.find((s) => s.staffProfileId === staffId)?.baseRate ?? null}
+            onSaved={(m) => { setNotice(m); setError(null); reload(); }}
+            onError={fail}
+          />
+          <RunPayrollBar branchId={branchId} onDone={flash} onError={fail} />
           <AttendancePanel staffId={staffId} rows={attendance} onDone={flash} onError={fail} />
           <PayrollPanel staffId={staffId} rows={payroll} onDone={flash} onError={fail} />
           <PerformancePanel staffId={staffId} rows={reviews} onDone={flash} onError={fail} />
@@ -173,34 +182,115 @@ function AttendancePanel({
   );
 }
 
-/* ── Payroll ────────────────────────────────────────────────────── */
+/* ── Compensation: edit a staff member's hourly base rate ─────────── */
+function CompensationPanel({
+  staffId, currentRate, onSaved, onError,
+}: { staffId: string; currentRate: string | null; onSaved: (m: string) => void; onError: (m: string) => void }) {
+  const [rate, setRate] = useState(currentRate ?? "");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    const n = Number(rate);
+    if (!Number.isFinite(n) || n < 0 || n > 100000) {
+      onError("Hourly rate must be a number between 0 and 100000.");
+      return;
+    }
+    setBusy(true);
+    const r = await fetch(`/api/staff/${staffId}/rate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRate: n }),
+    });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) return onError(errMsg(d));
+    onSaved(`Hourly rate set to ${d.baseRate}.`);
+  };
+
+  return (
+    <Section title="Compensation">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "end" }}>
+        <label style={labelStyle}>
+          Hourly base rate
+          <input
+            type="number" min="0" step="0.01"
+            style={{ ...inp, width: 140 }}
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+          />
+        </label>
+        <button type="button" style={{ ...primary, opacity: busy ? 0.6 : 1 }} onClick={save} disabled={busy}>
+          {busy ? "Saving…" : "Save rate"}
+        </button>
+        {currentRate && <span style={dim}>Current: {currentRate}</span>}
+      </div>
+      <p style={{ ...dim, marginTop: 8 }}>Used by the automated payroll engine for future runs.</p>
+    </Section>
+  );
+}
+
+/* ── Automated payroll run (branch-wide, one transaction) ─────────── */
+function currentMonth(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+/** First day of `YYYY-MM` and first day of the following month, as ISO dates. */
+function monthBounds(month: string): { start: string; end: string } {
+  const [y, m] = month.split("-").map(Number);
+  const start = `${y}-${String(m).padStart(2, "0")}-01`;
+  const ny = m === 12 ? y + 1 : y;
+  const nm = m === 12 ? 1 : m + 1;
+  const end = `${ny}-${String(nm).padStart(2, "0")}-01`;
+  return { start, end };
+}
+
+function RunPayrollBar({
+  branchId, onDone, onError,
+}: { branchId: string; onDone: (m: string) => void; onError: (m: string) => void }) {
+  const [month, setMonth] = useState(currentMonth());
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    const { start, end } = monthBounds(month);
+    if (!window.confirm(`Run payroll for all active staff for ${month}? This posts immutable ledger entries.`)) return;
+    setBusy(true);
+    const r = await fetch("/api/hr/payroll/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ branchId, periodStart: start, periodEnd: end }),
+    });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) return onError(errMsg(d));
+    onDone(
+      `Payroll run for ${month}: ${d.created} created, ${d.skipped} skipped, net ${Number(d.totalNet).toFixed(2)} ${d.currency}.`,
+    );
+  };
+
+  return (
+    <Section title="Run payroll">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "end" }}>
+        <label style={labelStyle}>
+          Pay month
+          <input type="month" style={inp} value={month} onChange={(e) => setMonth(e.target.value)} />
+        </label>
+        <button type="button" style={{ ...primary, opacity: busy ? 0.6 : 1 }} onClick={run} disabled={busy}>
+          {busy ? "Running…" : "Run Monthly Payroll"}
+        </button>
+      </div>
+      <p style={{ ...dim, marginTop: 8 }}>
+        Calculates each active tutor’s pay from their scheduled sessions × hourly rate − 15% deductions, in one
+        atomic transaction. Re-running a month skips staff already paid for it.
+      </p>
+    </Section>
+  );
+}
+
+/* ── Payroll (read-only ledger; generated by the automated run) ───── */
 function PayrollPanel({
   staffId, rows, onDone, onError,
 }: { staffId: string; rows: PayrollRow[]; onDone: (m: string) => void; onError: (m: string) => void }) {
-  const [periodStart, setPeriodStart] = useState(todayISO());
-  const [periodEnd, setPeriodEnd] = useState(todayISO());
-  const [gross, setGross] = useState("");
-  const [deductions, setDeductions] = useState("");
-  const [currency, setCurrency] = useState("USD");
-
-  const submit = async () => {
-    const r = await fetch("/api/hr/payroll", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        staffProfileId: staffId,
-        periodStart, periodEnd,
-        grossAmount: Number(gross),
-        deductions: deductions ? Number(deductions) : undefined,
-        currency,
-      }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) return onError(errMsg(d));
-    setGross(""); setDeductions("");
-    onDone("Payroll record created.");
-  };
-
+  void staffId;
   const markPaid = async (id: string) => {
     const r = await fetch(`/api/hr/payroll/${id}/paid`, { method: "POST" });
     const d = await r.json().catch(() => ({}));
@@ -209,26 +299,25 @@ function PayrollPanel({
   };
 
   return (
-    <Section title="Payroll">
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "end", marginBottom: 12 }}>
-        <label style={labelStyle}>Period start<input type="date" style={inp} value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} /></label>
-        <label style={labelStyle}>Period end<input type="date" style={inp} value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} /></label>
-        <label style={labelStyle}>Gross<input type="number" min="0" step="0.01" style={{ ...inp, width: 110 }} value={gross} onChange={(e) => setGross(e.target.value)} /></label>
-        <label style={labelStyle}>Deductions<input type="number" min="0" step="0.01" style={{ ...inp, width: 110 }} value={deductions} onChange={(e) => setDeductions(e.target.value)} placeholder="0" /></label>
-        <label style={labelStyle}>Currency<input style={{ ...inp, width: 70 }} value={currency} onChange={(e) => setCurrency(e.target.value)} /></label>
-        <button type="button" style={primary} onClick={submit} disabled={!gross}>Add</button>
-      </div>
-      {rows.length === 0 ? <p style={dim}>No payroll records.</p> : (
+    <Section title="Payroll ledger">
+      <p style={{ ...dim, marginTop: 0 }}>
+        Records are generated by the automated monthly run (hours × rate − {Math.round(0.15 * 100)}%) and are immutable.
+      </p>
+      {rows.length === 0 ? <p style={dim}>No payroll records. Use “Run Monthly Payroll” above.</p> : (
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead><tr style={{ textAlign: "left", opacity: 0.6 }}>
-            <th style={th}>Period</th><th style={th}>Gross</th><th style={th}>Net</th><th style={th}>Status</th><th style={th} />
+            <th style={th}>Period</th><th style={th}>Sessions</th><th style={th}>Hours</th><th style={th}>Rate</th>
+            <th style={th}>Gross</th><th style={th}>Net</th><th style={th}>Status</th><th style={th} />
           </tr></thead>
           <tbody>
             {rows.map((p) => (
               <tr key={p.id} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
                 <td style={td}>{p.periodStart} → {p.periodEnd}</td>
+                <td style={td}>{p.sessionsWorked ?? "—"}</td>
+                <td style={td}>{p.hoursWorked ?? "—"}</td>
+                <td style={td}>{p.hourlyRate ? `${p.hourlyRate} ${p.currency}` : "—"}</td>
                 <td style={td}>{p.grossAmount} {p.currency}</td>
-                <td style={td}>{p.netAmount} {p.currency}</td>
+                <td style={td}><strong>{p.netAmount}</strong> {p.currency}</td>
                 <td style={td}>{p.status}</td>
                 <td style={{ ...td, textAlign: "right" }}>
                   {p.status !== "paid" && <button type="button" style={miniBtn} onClick={() => markPaid(p.id)}>Mark paid</button>}

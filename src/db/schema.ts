@@ -238,6 +238,10 @@ export const staffProfiles = pgTable(
       .references(() => branches.id, { onDelete: "restrict" }),
     department: varchar("department", { length: 128 }).notNull(),
     employeeNumber: varchar("employee_number", { length: 64 }),
+    /** Hourly pay rate used by the automated payroll engine (per worked session). */
+    baseRate: numeric("base_rate", { precision: 10, scale: 2 })
+      .notNull()
+      .default("25.00"),
     status: staffStatusEnum("status").notNull().default("onboarding"),
     hireDate: date("hire_date").notNull(),
     retirementDate: date("retirement_date"), // null until offboarded
@@ -738,6 +742,10 @@ export const payrollRecords = pgTable(
       .references(() => branches.id, { onDelete: "cascade" }),
     periodStart: date("period_start").notNull(),
     periodEnd: date("period_end").notNull(),
+    /** Auditable basis for an auto-generated entry: worked sessions × hours × rate. */
+    sessionsWorked: integer("sessions_worked"),
+    hoursWorked: numeric("hours_worked", { precision: 8, scale: 2 }),
+    hourlyRate: numeric("hourly_rate", { precision: 10, scale: 2 }),
     grossAmount: numeric("gross_amount", { precision: 12, scale: 2 }).notNull(),
     deductions: numeric("deductions", { precision: 12, scale: 2 })
       .notNull()

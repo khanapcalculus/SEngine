@@ -42,6 +42,7 @@ export function OnboardStaffForm({
     fullName: "",
     department: "",
     hireDate: "",
+    baseRate: "",
   });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
@@ -62,6 +63,11 @@ export function OnboardStaffForm({
     if (!f.hireDate) errors.hireDate = "Hire date is required";
     else if (isNaN(Date.parse(f.hireDate)))
       errors.hireDate = "Please enter a valid date";
+    if (f.baseRate !== "") {
+      const r = Number(f.baseRate);
+      if (!Number.isFinite(r) || r < 0 || r > 100000)
+        errors.baseRate = "Hourly rate must be a number 0–100000";
+    }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   }
@@ -79,12 +85,20 @@ export function OnboardStaffForm({
       const res = await fetch("/api/staff/onboard", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...f, orgId: scope.orgId, branchId: scope.branchId }),
+        body: JSON.stringify({
+          email: f.email,
+          fullName: f.fullName,
+          department: f.department,
+          hireDate: f.hireDate,
+          baseRate: f.baseRate !== "" ? Number(f.baseRate) : undefined,
+          orgId: scope.orgId,
+          branchId: scope.branchId,
+        }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) return setErr(fmtErr(d));
       onDone(`Onboarded ${f.fullName}. Temporary password: ${d.temporaryPassword}`);
-      setF({ email: "", fullName: "", department: "", hireDate: "" });
+      setF({ email: "", fullName: "", department: "", hireDate: "", baseRate: "" });
       setFieldErrors({});
     } catch {
       setErr("An unexpected error occurred. Please try again.");
@@ -151,6 +165,23 @@ export function OnboardStaffForm({
           {fieldErrors.hireDate && (
             <p role="alert" style={fieldErrorStyle}>
               {fieldErrors.hireDate}
+            </p>
+          )}
+        </div>
+        <div>
+          <input
+            style={inp}
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="Hourly rate (default 25.00)"
+            disabled={disabled}
+            value={f.baseRate}
+            onChange={(e) => setF({ ...f, baseRate: e.target.value })}
+          />
+          {fieldErrors.baseRate && (
+            <p role="alert" style={fieldErrorStyle}>
+              {fieldErrors.baseRate}
             </p>
           )}
         </div>

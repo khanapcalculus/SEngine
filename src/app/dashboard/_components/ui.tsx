@@ -38,6 +38,7 @@ export interface StaffRow {
   email: string;
   department: string;
   status: string;
+  baseRate?: string;
 }
 export interface StudentRow {
   studentProfileId: string;

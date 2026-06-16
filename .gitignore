@@ -27,3 +27,10 @@ next-env.d.ts
 # secrets / recovery codes — never commit
 recovery-codes.txt
 *recovery*.txt
+
+# loose scratch / secret-bearing notes accidentally created in repo root — never commit
+/fe_oa_*.txt
+/AI_PROVIDER*.txt
+/Untitled.txt
+/Summary of *.txt
+/httpsimage*.txt

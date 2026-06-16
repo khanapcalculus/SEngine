@@ -95,6 +95,8 @@ export async function onboardStaff(
         employeeNumber: input.employeeNumber,
         hireDate: input.hireDate,
         status: "onboarding",
+        // Omit when not provided so the column default (25.00) applies.
+        ...(input.baseRate !== undefined ? { baseRate: input.baseRate.toFixed(2) } : {}),
       })
       .returning({ id: staffProfiles.id });
 
@@ -126,6 +128,7 @@ export interface BranchStaffRow {
   department: string;
   status: string;
   hireDate: string;
+  baseRate: string;
 }
 
 /**
@@ -145,6 +148,7 @@ export async function getActiveStaffForBranch(
       department: staffProfiles.department,
       status: staffProfiles.status,
       hireDate: staffProfiles.hireDate,
+      baseRate: staffProfiles.baseRate,
     })
     .from(staffProfiles)
     .innerJoin(users, eq(staffProfiles.userId, users.id))
@@ -174,10 +178,53 @@ export async function listStaffForBranch(
       department: staffProfiles.department,
       status: staffProfiles.status,
       hireDate: staffProfiles.hireDate,
+      baseRate: staffProfiles.baseRate,
     })
     .from(staffProfiles)
     .innerJoin(users, eq(staffProfiles.userId, users.id))
     .where(eq(staffProfiles.branchId, branchId));
+}
+
+/**
+ * Set a staff member's hourly base rate (the editing path). Branch-scoped +
+ * audited; the new rate feeds the automated payroll engine for future runs.
+ */
+export async function setStaffBaseRate(
+  db: DB,
+  staffProfileId: string,
+  baseRate: number,
+  ctx: AuthContext,
+): Promise<{ staffProfileId: string; baseRate: string }> {
+  return db.transaction(async (tx) => {
+    const [staff] = await tx
+      .select({ id: staffProfiles.id, branchId: staffProfiles.branchId, baseRate: staffProfiles.baseRate })
+      .from(staffProfiles)
+      .where(eq(staffProfiles.id, staffProfileId))
+      .limit(1);
+    if (!staff) {
+      throw new ValidationError("Staff profile not found", { staffProfileId: "no such staff profile" });
+    }
+    assertBranchAccess(ctx, staff.branchId);
+
+    const next = baseRate.toFixed(2);
+    await tx
+      .update(staffProfiles)
+      .set({ baseRate: next, updatedAt: new Date() })
+      .where(eq(staffProfiles.id, staffProfileId));
+
+    await writeAudit(tx, {
+      actorId: ctx.userId,
+      orgId: ctx.orgId,
+      branchId: staff.branchId,
+      action: "staff.rate.update",
+      entityType: "staff_profile",
+      entityId: staffProfileId,
+      summary: `Hourly rate ${staff.baseRate} → ${next} for staff ${staffProfileId}`,
+      metadata: { previous: staff.baseRate, next },
+    });
+
+    return { staffProfileId, baseRate: next };
+  });
 }
 
 export interface StaffStatusResult {

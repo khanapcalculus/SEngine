@@ -156,6 +156,9 @@ export interface PayrollRow {
   id: string;
   periodStart: string;
   periodEnd: string;
+  sessionsWorked: number | null;
+  hoursWorked: string | null;
+  hourlyRate: string | null;
   grossAmount: string;
   deductions: string;
   netAmount: string;
@@ -168,6 +171,9 @@ const PAYROLL_COLS = {
   id: payrollRecords.id,
   periodStart: payrollRecords.periodStart,
   periodEnd: payrollRecords.periodEnd,
+  sessionsWorked: payrollRecords.sessionsWorked,
+  hoursWorked: payrollRecords.hoursWorked,
+  hourlyRate: payrollRecords.hourlyRate,
   grossAmount: payrollRecords.grossAmount,
   deductions: payrollRecords.deductions,
   netAmount: payrollRecords.netAmount,

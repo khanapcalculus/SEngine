@@ -36,6 +36,19 @@ export interface OnboardStaffInput {
   department: string;
   hireDate: string; // ISO yyyy-mm-dd
   employeeNumber?: string;
+  /** Hourly pay rate for the automated payroll engine. */
+  baseRate?: number;
+}
+
+/** Shared rate validator: a non-negative money amount (≤ 100000), or a field error. */
+function readBaseRate(b: Record<string, unknown>, fields: Record<string, string>): number | undefined {
+  if (b.baseRate === undefined || b.baseRate === null || b.baseRate === "") return undefined;
+  const n = typeof b.baseRate === "number" ? b.baseRate : Number(b.baseRate);
+  if (!Number.isFinite(n) || n < 0 || n > 100000) {
+    fields.baseRate = "baseRate must be a number between 0 and 100000";
+    return undefined;
+  }
+  return Math.round(n * 100) / 100;
 }
 
 /**
@@ -72,6 +85,8 @@ export function parseOnboardStaff(body: unknown): OnboardStaffInput {
     else employeeNumber = b.employeeNumber;
   }
 
+  const baseRate = readBaseRate(b, fields);
+
   if (Object.keys(fields).length > 0)
     throw new ValidationError("Invalid request body", fields);
 
@@ -83,7 +98,23 @@ export function parseOnboardStaff(body: unknown): OnboardStaffInput {
     department,
     hireDate,
     employeeNumber,
+    baseRate,
   };
+}
+
+export interface SetStaffRateInput {
+  baseRate: number;
+}
+
+/** Validate the POST /api/staff/[staffProfileId]/rate body. */
+export function parseSetStaffRate(body: unknown): SetStaffRateInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+  const baseRate = readBaseRate(b, fields);
+  if (baseRate === undefined && !fields.baseRate) fields.baseRate = "baseRate is required";
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+  return { baseRate: baseRate as number };
 }
 
 export interface EnrollStudentInput {
@@ -516,6 +547,43 @@ export function parseRegisterStaffDocument(body: unknown): RegisterStaffDocument
     throw new ValidationError("Invalid request body", fields);
 
   return { fileName, url, storageKey, category, contentType, sizeBytes };
+}
+
+export interface PayrollRunInput {
+  branchId: string;
+  periodStart: string;
+  periodEnd: string;
+  currency?: string;
+}
+
+/** Validate the POST /api/hr/payroll/run body (bulk automated run). */
+export function parsePayrollRun(body: unknown): PayrollRunInput {
+  const fields: Record<string, string> = {};
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  if (!isUuid(b.branchId)) fields.branchId = "branchId must be a UUID";
+
+  const periodStart = typeof b.periodStart === "string" ? b.periodStart : "";
+  if (!ISO_DATE_RE.test(periodStart) || Number.isNaN(Date.parse(periodStart)))
+    fields.periodStart = "periodStart must be ISO yyyy-mm-dd";
+
+  const periodEnd = typeof b.periodEnd === "string" ? b.periodEnd : "";
+  if (!ISO_DATE_RE.test(periodEnd) || Number.isNaN(Date.parse(periodEnd)))
+    fields.periodEnd = "periodEnd must be ISO yyyy-mm-dd";
+  else if (periodStart && Date.parse(periodEnd) <= Date.parse(periodStart))
+    fields.periodEnd = "periodEnd must be after periodStart";
+
+  let currency: string | undefined;
+  if (b.currency !== undefined) {
+    if (typeof b.currency !== "string" || b.currency.length < 1 || b.currency.length > 8)
+      fields.currency = "currency must be a 1-8 char code";
+    else currency = b.currency.trim().toUpperCase();
+  }
+
+  if (Object.keys(fields).length > 0)
+    throw new ValidationError("Invalid request body", fields);
+
+  return { branchId: b.branchId as string, periodStart, periodEnd, currency };
 }
 
 export interface CreatePayrollInput {
