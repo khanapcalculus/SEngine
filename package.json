@@ -6,13 +6,15 @@
     "lint": "next lint",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:seed": "tsx src/db/seed.ts"
+    "db:seed": "tsx src/db/seed.ts",
+    "db:seed:demo": "tsx src/db/seed-demo.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
     "@types/katex": "^0.16.8",
     "@vercel/blob": "^2.4.0",
     "drizzle-orm": "^0.45.2",
+    "jspdf": "^3.0.4",
     "katex": "^0.17.0",
     "next": "^16.2.9",
     "pdfjs-dist": "^6.0.227",

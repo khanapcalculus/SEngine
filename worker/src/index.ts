@@ -37,7 +37,12 @@ export default {
     if (!match) return new Response("Not found", { status: 404 });
     const classId = decodeURIComponent(match[1]);
 
-    if (req.headers.get("Upgrade") !== "websocket") {
+    // Two request kinds share the /room/:classId route, both token-verified:
+    //  - a WebSocket upgrade (live board), or
+    //  - a server-side context dump for the AI tutor (header `x-rtc-op: context`,
+    //    sent by the Vercel route — no browser, so no Upgrade header).
+    const isContextFetch = req.headers.get("x-rtc-op") === "context";
+    if (!isContextFetch && req.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 

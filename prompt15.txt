@@ -1,0 +1,12 @@
+Fantastic work on keeping the core service pure and routing the Durable Object fetch safely at the API boundary. This keeps our unit tests highly isolated and decoupled from the network.
+
+Let's finish this module up and pivot immediately to the student schedule experience. Please complete these two steps:
+
+1. UI Indicator Affordance
+Wire up the UI affordance in the AI Tutor panel so that it dynamically displays the context status based on the backend response. If contextSource is "server", show a clean badge or text indicator saying "Context: Live Board". If it drops back, show "Context: Local Fallback". This will give us instant visual confirmation during QA.
+
+2. Student-Facing "Join Class" Logic (#1C Gap)
+Once that UI indicator is wired, immediately build out the missing student scheduling layer. Implement the GET /api/me/sessions endpoint to fetch the upcoming sessions for a student's actively enrolled classes, and build the student-facing dashboard widget that displays a time-gated "Join Class" link when the current time falls within the session window (now ∈ [start, end]).
+
+Go ahead and implement these additions. Once complete, I will run the deployment steps for both Wrangler and Vercel!
+EOF

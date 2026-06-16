@@ -197,3 +197,40 @@ describe("topmostHit", () => {
     expect(topmostHit([legacy], new Set(), { x: 0.5, y: 0.5 }, SIZE)).toBeNull();
   });
 });
+
+describe("arc / polygon / frame", () => {
+  it("narrows an arc with angle defaults and absolute radius", () => {
+    const s = asShape({ kind: "arc", cx: 0.5, cy: 0.5, r: -0.2 });
+    expect(s).toMatchObject({ kind: "arc", cx: 0.5, cy: 0.5, r: 0.2, a0: 0, a1: 360 });
+  });
+
+  it("clamps polygon sides into [3,24] and coerces star/fill", () => {
+    const s = asShape({ kind: "polygon", cx: 0.5, cy: 0.5, r: 0.2, sides: 99, star: 1, fill: 1 });
+    expect(s).toMatchObject({ kind: "polygon", sides: 24, star: true, fill: true });
+    const t = asShape({ kind: "polygon", cx: 0.5, cy: 0.5, r: 0.2, sides: 1 });
+    expect(t).toMatchObject({ sides: 3 });
+  });
+
+  it("narrows a frame with a default label", () => {
+    expect(asShape({ kind: "frame", x: 0.1, y: 0.1, w: 0.4, h: 0.3 })).toMatchObject({
+      kind: "frame",
+      label: "Frame",
+    });
+  });
+
+  it("hit-tests an arc near its ring and a polygon edge", () => {
+    const arc = { type: "shape", payload: { id: "a", kind: "arc", cx: 0.5, cy: 0.5, r: 0.3, a0: 0, a1: 180, color: "#fff", width: 2 } };
+    // a1=180° point sits to the WEST of center at (0.2, 0.5)
+    expect(hitTest(arc, { x: 0.2, y: 0.5 }, SIZE)).toBe(true);
+    expect(hitTest(arc, { x: 0.5, y: 0.5 }, SIZE)).toBe(false); // center, off the ring
+
+    const poly = { type: "shape", payload: { id: "p", kind: "polygon", cx: 0.5, cy: 0.5, r: 0.3, sides: 4, rot: 0, star: false, fill: true, color: "#fff", width: 2 } };
+    expect(hitTest(poly, { x: 0.5, y: 0.5 }, SIZE)).toBe(true); // filled interior
+  });
+
+  it("frame is grabbed by its border/title, not its interior", () => {
+    const frame = { type: "shape", payload: { id: "f", kind: "frame", x: 0.2, y: 0.2, w: 0.6, h: 0.6, label: "Pg", color: "#fff" } };
+    expect(hitTest(frame, { x: 0.2, y: 0.5 }, SIZE)).toBe(true); // left border
+    expect(hitTest(frame, { x: 0.5, y: 0.5 }, SIZE)).toBe(false); // interior
+  });
+});

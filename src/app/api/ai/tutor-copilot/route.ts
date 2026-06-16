@@ -11,6 +11,7 @@ import { parseTutorCopilot } from "../../../../lib/validation";
 import { json, handleError } from "../../../../lib/http";
 import { getGemmaClient } from "../../../../modules/lms/gemma.factory";
 import { runTutorCopilot } from "../../../../modules/lms/tutor.service";
+import { fetchBoardContext } from "../../../../modules/lms/board_context";
 
 export const runtime = "edge";
 
@@ -28,12 +29,23 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     const input = parseTutorCopilot(raw);
-    const result = await runTutorCopilot(getGemmaClient(), input);
+
+    // Read the board SERVER-SIDE from its Durable Object (authoritative); only
+    // fall back to client-sent context if the live read is unavailable.
+    const live = await fetchBoardContext(input.classId, {
+      userId: ctx.userId,
+      role: ctx.role,
+      canDraw: true,
+    });
+    const whiteboardContext = live?.text || input.whiteboardContext;
+
+    const result = await runTutorCopilot(getGemmaClient(), { ...input, whiteboardContext });
 
     return json({
       classId: input.classId,
       model: result.model,
       answer: result.answer,
+      contextSource: live?.text ? "server" : input.whiteboardContext ? "client" : "none",
     });
   } catch (err) {
     return handleError(err);

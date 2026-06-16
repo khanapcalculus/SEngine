@@ -919,6 +919,7 @@ export function TutorPanel({ classes }: { classes: ClassRow[] }) {
   const [query, setQuery] = useState("");
   const [whiteboard, setWhiteboard] = useState("");
   const [answer, setAnswer] = useState<string | null>(null);
+  const [contextSource, setContextSource] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -930,6 +931,7 @@ export function TutorPanel({ classes }: { classes: ClassRow[] }) {
     e.preventDefault();
     setErr(null);
     setAnswer(null);
+    setContextSource(null);
     setBusy(true);
     try {
       const res = await fetch("/api/ai/tutor-copilot", {
@@ -944,6 +946,7 @@ export function TutorPanel({ classes }: { classes: ClassRow[] }) {
       const d = await res.json().catch(() => ({}));
       if (!res.ok) return setErr(fmtErr(d) + " (is GEMMA_API_KEY configured?)");
       setAnswer(d.answer);
+      setContextSource(typeof d.contextSource === "string" ? d.contextSource : null);
     } finally {
       setBusy(false);
     }
@@ -990,23 +993,52 @@ export function TutorPanel({ classes }: { classes: ClassRow[] }) {
             {busy ? "Asking Gemma…" : "Ask tutor"}
           </button>
           {answer && (
-            <pre
-              style={{
-                whiteSpace: "pre-wrap",
-                background: "#11162a",
-                padding: 12,
-                borderRadius: 8,
-                fontSize: 12,
-                lineHeight: 1.5,
-                margin: 0,
-              }}
-            >
-              {answer}
-            </pre>
+            <>
+              {contextSource && contextSource !== "none" && <ContextBadge source={contextSource} />}
+              <pre
+                style={{
+                  whiteSpace: "pre-wrap",
+                  background: "#11162a",
+                  padding: 12,
+                  borderRadius: 8,
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  margin: 0,
+                }}
+              >
+                {answer}
+              </pre>
+            </>
           )}
         </form>
       )}
     </Section>
+  );
+}
+
+/** Shows whether the tutor answer used the live whiteboard or a local fallback. */
+function ContextBadge({ source }: { source: string }) {
+  const live = source === "server";
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        alignSelf: "flex-start",
+        padding: "3px 10px",
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 600,
+        color: live ? "#9be8b4" : "#ffcf8f",
+        background: live ? "rgba(155,232,180,0.12)" : "rgba(255,207,143,0.12)",
+        border: `1px solid ${live ? "rgba(155,232,180,0.4)" : "rgba(255,207,143,0.4)"}`,
+      }}
+      title={live ? "Read live from the class whiteboard's Durable Object" : "Live board unavailable — used the context you typed"}
+    >
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: live ? "#9be8b4" : "#ffcf8f" }} />
+      {live ? "Context: Live Board" : "Context: Local Fallback"}
+    </span>
   );
 }
 

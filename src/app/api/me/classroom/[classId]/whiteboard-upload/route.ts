@@ -94,7 +94,7 @@ export async function POST(
         addRandomSuffix: true,
         token: blobToken,
       });
-      return json({ url: blob.url });
+      return json({ url: blob.url, pathname: blob.pathname });
     } catch (putErr) {
       // Surface the real Blob error instead of a generic 500 — this is the
       // boundary we've been blind to. Logged to the Vercel function logs too.

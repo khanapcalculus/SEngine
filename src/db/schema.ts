@@ -108,6 +108,39 @@ export const submissionStatusEnum = pgEnum("submission_status", [
   "graded",
 ]);
 
+/** Module 2 — a staff member's attendance state for a given day. */
+export const staffAttendanceStatusEnum = pgEnum("staff_attendance_status", [
+  "present",
+  "absent",
+  "late",
+  "on_leave",
+  "remote",
+]);
+
+/** Module 2 — lifecycle of a payroll disbursement record. */
+export const payrollStatusEnum = pgEnum("payroll_status", [
+  "pending",
+  "paid",
+  "cancelled",
+]);
+
+/** Module 3 — admissions funnel stage of an application. */
+export const applicationStatusEnum = pgEnum("application_status", [
+  "submitted",
+  "under_review",
+  "accepted",
+  "rejected",
+  "enrolled",
+]);
+
+/** Module 3 — payment state of a fee invoice. */
+export const feeInvoiceStatusEnum = pgEnum("fee_invoice_status", [
+  "unpaid",
+  "partial",
+  "paid",
+  "void",
+]);
+
 /* ─────────────────────────── Organizations ─────────────────────── */
 /** Top of the tenant hierarchy: a network of schools (Super Admin scope). */
 export const organizations = pgTable("organizations", {
@@ -300,6 +333,84 @@ export const classes = pgTable(
   }),
 );
 
+/* ─────────────────────────── Class Sessions ────────────────────── */
+/**
+ * A scheduled meeting of a class — the calendar entry behind the Schedule view.
+ * Each row is a single dated/timed session for a class (the live whiteboard for
+ * that class is opened from it). branchId is denormalized from the class so the
+ * Schedule page can list "every session at this branch" from one index without
+ * a join, mirroring how assignments index by (class, due).
+ */
+export const classSessions = pgTable(
+  "class_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    /** Denormalized from the class for branch-scoped calendar queries. */
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 255 }).notNull(),
+    /** When the session starts and how long it runs (end derived in the UI). */
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    durationMinutes: integer("duration_minutes").notNull().default(60),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // Calendar hot-path: a branch's sessions in chronological order.
+    branchStartsIdx: index("class_sessions_branch_starts_idx").on(
+      t.branchId,
+      t.startsAt,
+    ),
+    // "When does this class meet?" per-class lookup.
+    classStartsIdx: index("class_sessions_class_starts_idx").on(
+      t.classId,
+      t.startsAt,
+    ),
+  }),
+);
+
+/* ────────────────────────── Session Snapshots ──────────────────── */
+/**
+ * A saved whiteboard snapshot captured when a tutor ends a live session. Bytes
+ * (the canvas image / serialized ops) live in object storage; we keep the url +
+ * key. Written ATOMICALLY with the attendance + payroll writes of the
+ * end-session transaction — if any of those fail, this row never persists.
+ */
+export const sessionSnapshots = pgTable(
+  "session_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => classSessions.id, { onDelete: "cascade" }),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    storageKey: varchar("storage_key", { length: 1024 }).notNull(),
+    capturedBy: uuid("captured_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    sessionIdx: index("session_snapshots_session_idx").on(t.sessionId),
+  }),
+);
+
 /* ──────────────────────────── Enrollments ──────────────────────── */
 /**
  * Join of a student to a class. A student may take many classes; a class has
@@ -332,6 +443,196 @@ export const enrollments = pgTable(
     ),
     // "Who is in this class?" roster lookup.
     classIdx: index("enrollments_class_id_idx").on(t.classId),
+  }),
+);
+
+/* ──────────────────────────── Guardianships ────────────────────── */
+/**
+ * Links a parent/guardian User to a Student_Profile they may view (the Parent
+ * portal reads through this). A parent may have many children; a student may
+ * have many guardians — but each pairing exists at most ONCE. This is the only
+ * thing that lets the `parent` role see any student data, and every parent read
+ * path is gated by a row here (Guideline #4).
+ */
+export const guardianships = pgTable(
+  "guardianships",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    parentUserId: uuid("parent_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    studentProfileId: uuid("student_profile_id")
+      .notNull()
+      .references(() => studentProfiles.id, { onDelete: "cascade" }),
+    /** e.g. mother / father / guardian. */
+    relationship: varchar("relationship", { length: 64 })
+      .notNull()
+      .default("guardian"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // A given parent is linked to a given student at most once.
+    parentStudentUq: uniqueIndex("guardianships_parent_student_idx").on(
+      t.parentUserId,
+      t.studentProfileId,
+    ),
+    // "Who are this parent's children?" — the portal hot path.
+    parentIdx: index("guardianships_parent_idx").on(t.parentUserId),
+    // "Who are this student's guardians?"
+    studentIdx: index("guardianships_student_idx").on(t.studentProfileId),
+  }),
+);
+
+/* ──────────────────────── Admission Applications ────────────────── */
+/**
+ * Module 3 — the admissions funnel. A prospective student's application to a
+ * branch, moving submitted → under_review → accepted/rejected, and finally
+ * `enrolled` once converted into a real Student_Profile (studentProfileId is set
+ * at that point, linking the funnel to the created record). examScore is an
+ * optional entrance-exam capture.
+ */
+export const admissionApplications = pgTable(
+  "admission_applications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    applicantName: varchar("applicant_name", { length: 255 }).notNull(),
+    applicantEmail: varchar("applicant_email", { length: 320 }).notNull(),
+    cohortYear: integer("cohort_year").notNull(),
+    status: applicationStatusEnum("status").notNull().default("submitted"),
+    examScore: integer("exam_score"), // optional entrance-exam result
+    notes: text("notes"),
+    reviewedBy: uuid("reviewed_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    /** The Student_Profile created when this application was enrolled (if any). */
+    studentProfileId: uuid("student_profile_id").references(
+      () => studentProfiles.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // The admissions board: a branch's applications by stage.
+    branchStatusIdx: index("admission_applications_branch_status_idx").on(
+      t.branchId,
+      t.status,
+    ),
+  }),
+);
+
+/* ────────────────────────────── Fee Invoices ───────────────────── */
+/**
+ * Module 3 — fee collection. A charge raised against a student. amountPaid +
+ * status are maintained server-side as payments land (never trusted from a
+ * client); money is fixed-precision numeric.
+ */
+export const feeInvoices = pgTable(
+  "fee_invoices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    studentProfileId: uuid("student_profile_id")
+      .notNull()
+      .references(() => studentProfiles.id, { onDelete: "cascade" }),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    description: varchar("description", { length: 255 }).notNull(),
+    amountDue: numeric("amount_due", { precision: 12, scale: 2 }).notNull(),
+    amountPaid: numeric("amount_paid", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0"),
+    currency: varchar("currency", { length: 8 }).notNull().default("USD"),
+    status: feeInvoiceStatusEnum("status").notNull().default("unpaid"),
+    dueDate: date("due_date"),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    studentIdx: index("fee_invoices_student_idx").on(t.studentProfileId),
+    branchStatusIdx: index("fee_invoices_branch_status_idx").on(
+      t.branchId,
+      t.status,
+    ),
+  }),
+);
+
+/* ────────────────────────────── Fee Payments ───────────────────── */
+/** A payment applied to a fee invoice (append-only ledger). */
+export const feePayments = pgTable(
+  "fee_payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => feeInvoices.id, { onDelete: "cascade" }),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    method: varchar("method", { length: 32 }).notNull().default("cash"),
+    reference: varchar("reference", { length: 128 }),
+    recordedBy: uuid("recorded_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    paidAt: timestamp("paid_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    invoiceIdx: index("fee_payments_invoice_idx").on(t.invoiceId),
+  }),
+);
+
+/* ────────────────────────────── Credentials ────────────────────── */
+/**
+ * Module 3 — Graduation & Alumni. A degree/diploma issued to a graduated
+ * student. Each carries a unique, hard-to-guess `serial` that anyone can check
+ * via the public verification endpoint (credential verification), without
+ * exposing the rest of the student record.
+ */
+export const credentials = pgTable(
+  "credentials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    studentProfileId: uuid("student_profile_id")
+      .notNull()
+      .references(() => studentProfiles.id, { onDelete: "cascade" }),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 255 }).notNull(),
+    program: varchar("program", { length: 255 }),
+    /** Public verification code (unique). */
+    serial: varchar("serial", { length: 40 }).notNull(),
+    gpa: numeric("gpa", { precision: 4, scale: 2 }),
+    issuedDate: date("issued_date").notNull(),
+    issuedBy: uuid("issued_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    serialUq: uniqueIndex("credentials_serial_idx").on(t.serial),
+    studentIdx: index("credentials_student_idx").on(t.studentProfileId),
+    branchIdx: index("credentials_branch_idx").on(t.branchId),
   }),
 );
 
@@ -370,6 +671,176 @@ export const staffAssignments = pgTable(
     classIdx: index("staff_assignments_class_id_idx").on(t.classId),
     // "What does this educator work?" — the reverse routing lookup.
     staffIdx: index("staff_assignments_staff_id_idx").on(t.staffId),
+  }),
+);
+
+/* ─────────────────────────── Staff Attendance ──────────────────── */
+/**
+ * Module 2 — HR Operations. One row per staff member per day recording their
+ * attendance state. branchId is denormalized from the staff profile so a branch
+ * manager can pull "today's attendance for my branch" from one index; the unique
+ * (staff, date) keeps a single authoritative record per day (re-recording
+ * updates it).
+ */
+export const staffAttendance = pgTable(
+  "staff_attendance",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffId: uuid("staff_id")
+      .notNull()
+      .references(() => staffProfiles.id, { onDelete: "cascade" }),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    status: staffAttendanceStatusEnum("status").notNull().default("present"),
+    notes: text("notes"),
+    recordedBy: uuid("recorded_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // One attendance record per staff member per day.
+    staffDateUq: uniqueIndex("staff_attendance_staff_date_idx").on(
+      t.staffId,
+      t.date,
+    ),
+    // Branch-wide daily roll-call.
+    branchDateIdx: index("staff_attendance_branch_date_idx").on(
+      t.branchId,
+      t.date,
+    ),
+  }),
+);
+
+/* ─────────────────────────── Payroll Records ───────────────────── */
+/**
+ * Module 2 — HR Operations. A disbursement record for a staff member over a pay
+ * period. Money is stored as fixed-precision numeric (never float); netAmount is
+ * computed server-side as gross − deductions so the stored figure can't drift
+ * from a client-supplied value.
+ */
+export const payrollRecords = pgTable(
+  "payroll_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffId: uuid("staff_id")
+      .notNull()
+      .references(() => staffProfiles.id, { onDelete: "cascade" }),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    periodStart: date("period_start").notNull(),
+    periodEnd: date("period_end").notNull(),
+    grossAmount: numeric("gross_amount", { precision: 12, scale: 2 }).notNull(),
+    deductions: numeric("deductions", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0"),
+    netAmount: numeric("net_amount", { precision: 12, scale: 2 }).notNull(),
+    currency: varchar("currency", { length: 8 }).notNull().default("USD"),
+    status: payrollStatusEnum("status").notNull().default("pending"),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // A staff member's disbursement history, newest period first.
+    staffPeriodIdx: index("payroll_records_staff_period_idx").on(
+      t.staffId,
+      t.periodStart,
+    ),
+    // "What's outstanding/paid at this branch?"
+    branchStatusIdx: index("payroll_records_branch_status_idx").on(
+      t.branchId,
+      t.status,
+    ),
+  }),
+);
+
+/* ──────────────────────── Performance Reviews ──────────────────── */
+/**
+ * Module 2 — HR Operations. A periodic evaluation of a staff member (1–5 rating
+ * + narrative), attributed to the reviewing user. Append-only in spirit, like
+ * promotions: each review is a point-in-time snapshot the staff record reads.
+ */
+export const performanceReviews = pgTable(
+  "performance_reviews",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffId: uuid("staff_id")
+      .notNull()
+      .references(() => staffProfiles.id, { onDelete: "cascade" }),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    reviewDate: date("review_date").notNull(),
+    /** 1 (needs improvement) … 5 (outstanding). */
+    rating: integer("rating").notNull(),
+    summary: text("summary").notNull(),
+    reviewerId: uuid("reviewer_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // A staff member's review history.
+    staffDateIdx: index("performance_reviews_staff_date_idx").on(
+      t.staffId,
+      t.reviewDate,
+    ),
+  }),
+);
+
+/* ─────────────────────────── Staff Documents ───────────────────── */
+/**
+ * Module 2 — HR onboarding documents (contracts, IDs, certificates). The bytes
+ * live in object storage (Vercel Blob); we store only the access url + provider
+ * key, never blobs — mirroring submission_files.
+ */
+export const staffDocuments = pgTable(
+  "staff_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffId: uuid("staff_id")
+      .notNull()
+      .references(() => staffProfiles.id, { onDelete: "cascade" }),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    category: varchar("category", { length: 64 }).notNull().default("other"),
+    fileName: varchar("file_name", { length: 512 }).notNull(),
+    contentType: varchar("content_type", { length: 128 }),
+    sizeBytes: integer("size_bytes"),
+    storageProvider: varchar("storage_provider", { length: 32 })
+      .notNull()
+      .default("vercel_blob"),
+    storageKey: varchar("storage_key", { length: 1024 }).notNull(),
+    url: text("url").notNull(),
+    uploadedBy: uuid("uploaded_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    staffIdx: index("staff_documents_staff_idx").on(t.staffId),
   }),
 );
 
@@ -643,8 +1114,66 @@ export const studentProfilesRelations = relations(
     }),
     enrollments: many(enrollments),
     promotions: many(studentPromotions),
+    guardianships: many(guardianships),
+    invoices: many(feeInvoices),
+    credentials: many(credentials),
   }),
 );
+
+export const credentialsRelations = relations(credentials, ({ one }) => ({
+  student: one(studentProfiles, {
+    fields: [credentials.studentProfileId],
+    references: [studentProfiles.id],
+  }),
+  branch: one(branches, {
+    fields: [credentials.branchId],
+    references: [branches.id],
+  }),
+}));
+
+export const guardianshipsRelations = relations(guardianships, ({ one }) => ({
+  parent: one(users, {
+    fields: [guardianships.parentUserId],
+    references: [users.id],
+  }),
+  student: one(studentProfiles, {
+    fields: [guardianships.studentProfileId],
+    references: [studentProfiles.id],
+  }),
+}));
+
+export const admissionApplicationsRelations = relations(
+  admissionApplications,
+  ({ one }) => ({
+    branch: one(branches, {
+      fields: [admissionApplications.branchId],
+      references: [branches.id],
+    }),
+    student: one(studentProfiles, {
+      fields: [admissionApplications.studentProfileId],
+      references: [studentProfiles.id],
+    }),
+  }),
+);
+
+export const feeInvoicesRelations = relations(feeInvoices, ({ one, many }) => ({
+  student: one(studentProfiles, {
+    fields: [feeInvoices.studentProfileId],
+    references: [studentProfiles.id],
+  }),
+  branch: one(branches, {
+    fields: [feeInvoices.branchId],
+    references: [branches.id],
+  }),
+  payments: many(feePayments),
+}));
+
+export const feePaymentsRelations = relations(feePayments, ({ one }) => ({
+  invoice: one(feeInvoices, {
+    fields: [feePayments.invoiceId],
+    references: [feeInvoices.id],
+  }),
+}));
 
 export const studentPromotionsRelations = relations(
   studentPromotions,
@@ -665,6 +1194,18 @@ export const classesRelations = relations(classes, ({ one, many }) => ({
   staffAssignments: many(staffAssignments),
   assignments: many(assignments),
   discussionThreads: many(discussionThreads),
+  sessions: many(classSessions),
+}));
+
+export const classSessionsRelations = relations(classSessions, ({ one }) => ({
+  class: one(classes, {
+    fields: [classSessions.classId],
+    references: [classes.id],
+  }),
+  branch: one(branches, {
+    fields: [classSessions.branchId],
+    references: [branches.id],
+  }),
 }));
 
 export const assignmentsRelations = relations(
@@ -758,6 +1299,41 @@ export const staffProfilesRelations = relations(
       references: [branches.id],
     }),
     assignments: many(staffAssignments),
+    attendance: many(staffAttendance),
+    payroll: many(payrollRecords),
+    reviews: many(performanceReviews),
+    documents: many(staffDocuments),
+  }),
+);
+
+export const staffDocumentsRelations = relations(staffDocuments, ({ one }) => ({
+  staff: one(staffProfiles, {
+    fields: [staffDocuments.staffId],
+    references: [staffProfiles.id],
+  }),
+}));
+
+export const staffAttendanceRelations = relations(staffAttendance, ({ one }) => ({
+  staff: one(staffProfiles, {
+    fields: [staffAttendance.staffId],
+    references: [staffProfiles.id],
+  }),
+}));
+
+export const payrollRecordsRelations = relations(payrollRecords, ({ one }) => ({
+  staff: one(staffProfiles, {
+    fields: [payrollRecords.staffId],
+    references: [staffProfiles.id],
+  }),
+}));
+
+export const performanceReviewsRelations = relations(
+  performanceReviews,
+  ({ one }) => ({
+    staff: one(staffProfiles, {
+      fields: [performanceReviews.staffId],
+      references: [staffProfiles.id],
+    }),
   }),
 );
 

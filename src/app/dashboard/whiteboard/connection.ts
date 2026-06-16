@@ -21,7 +21,31 @@ export type WhiteboardOpType =
   | "equation"
   | "clear"
   | "cursor"
-  | "erase";
+  | "erase"
+  | "modify";
+
+/** Style overrides a `modify` op can re-apply to an existing object. */
+export interface ObjStyle {
+  color?: string;
+  width?: number;
+  fontSize?: number;
+  fill?: boolean;
+  fillColor?: string;
+}
+
+/**
+ * The live mutation layered on top of an object's immutable create op:
+ * a normalized affine `m` (move/resize/rotate), `style` overrides, and a
+ * `deleted` tombstone. Reduced from `modify` ops exactly like `erased` — a
+ * create always precedes its modifies, so replay re-derives the same state.
+ */
+export interface ObjMutation {
+  m?: number[];
+  style?: ObjStyle;
+  deleted?: boolean;
+  /** Paint-order override; higher draws later (front). Default 0. */
+  z?: number;
+}
 
 export interface WhiteboardOp {
   type: WhiteboardOpType;
@@ -60,12 +84,18 @@ export interface WhiteboardState {
   /** Latest cursor op per sender (ephemeral presence). */
   cursors: Record<string, WhiteboardOp>;
   /**
-   * Ids tombstoned by an `erase` op. Kept as a set rather than splicing `ops`
-   * so the object eraser is idempotent and survives history replay: a create
-   * always precedes its erase in the op log, so re-seeding re-derives the same
-   * state. Renderers skip any op whose id is in this set.
+   * Ids tombstoned by an `erase` op (or a `modify` with deleted:true). Kept as a
+   * set rather than splicing `ops` so erasing is idempotent and survives history
+   * replay: a create always precedes its erase in the op log, so re-seeding
+   * re-derives the same state. Renderers skip any op whose id is in this set.
    */
   erased: Set<string>;
+  /**
+   * Per-object mutation (transform + style) reduced from `modify` ops. Kept in
+   * lockstep with `erased`. Renderers read it to layer move/resize/rotate and
+   * restyle over the object's original create.
+   */
+  mutations: Map<string, ObjMutation>;
 }
 
 /** Minimal structural WebSocket so tests can inject a fake. */
@@ -86,7 +116,9 @@ export interface ConnectionDeps {
   clearTimer: (id: number) => void;
 }
 
-const MAX_OPS = 5000; // safety cap on the local op log
+// Safety cap on the local op log. Matches the server DO's MAX_HISTORY so a full
+// board replayed on (re)join isn't truncated below what was persisted.
+const MAX_OPS = 10_000;
 const BASE_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 10_000;
 
@@ -132,6 +164,7 @@ function initialState(): WhiteboardState {
     ops: [],
     cursors: {},
     erased: new Set<string>(),
+    mutations: new Map<string, ObjMutation>(),
   };
 }
 
@@ -142,6 +175,53 @@ function eraseTargetId(payload: unknown): string | null {
     if (typeof t === "string") return t;
   }
   return null;
+}
+
+/** Narrow a `modify` payload to its target + the fields it actually carries. */
+function readModify(
+  payload: unknown,
+): { targetId: string; patch: ObjMutation } | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as Record<string, unknown>;
+  if (typeof p.targetId !== "string") return null;
+  const patch: ObjMutation = {};
+  if (
+    Array.isArray(p.m) &&
+    p.m.length === 6 &&
+    p.m.every((n) => typeof n === "number" && Number.isFinite(n))
+  ) {
+    patch.m = p.m as number[];
+  }
+  if (p.style && typeof p.style === "object") patch.style = p.style as ObjStyle;
+  if (typeof p.deleted === "boolean") patch.deleted = p.deleted;
+  if (typeof p.z === "number" && Number.isFinite(p.z)) patch.z = p.z;
+  return { targetId: p.targetId, patch };
+}
+
+/**
+ * Merge a mutation patch into the map, keeping `erased` in lockstep. Partial
+ * patches are supported (a restyle won't drop a prior transform); a complete
+ * snapshot replaces. Returns fresh copies so React sees new references.
+ */
+function mergeMutation(
+  mutations: Map<string, ObjMutation>,
+  erased: Set<string>,
+  targetId: string,
+  patch: ObjMutation,
+): { mutations: Map<string, ObjMutation>; erased: Set<string> } {
+  const nextMut = new Map(mutations);
+  const prev = nextMut.get(targetId) ?? {};
+  const merged: ObjMutation = { ...prev };
+  if (patch.m) merged.m = patch.m;
+  if (patch.style) merged.style = { ...prev.style, ...patch.style };
+  if (typeof patch.deleted === "boolean") merged.deleted = patch.deleted;
+  if (typeof patch.z === "number") merged.z = patch.z;
+  nextMut.set(targetId, merged);
+
+  const nextErased = new Set(erased);
+  if (merged.deleted) nextErased.add(targetId);
+  else nextErased.delete(targetId);
+  return { mutations: nextMut, erased: nextErased };
 }
 
 export class WhiteboardConnection {
@@ -245,15 +325,19 @@ export class WhiteboardConnection {
       // their target. A create always precedes its erase, so this re-derives the
       // exact live state on every (re)connect.
       const seeded: WhiteboardOp[] = [];
-      const erased = new Set<string>();
+      let erased = new Set<string>();
+      let mutations = new Map<string, ObjMutation>();
       for (const o of msg.ops) {
         if (PERSISTENT.has(o.type)) seeded.push(o);
         else if (o.type === "erase") {
           const t = eraseTargetId(o.payload);
           if (t) erased.add(t);
+        } else if (o.type === "modify") {
+          const r = readModify(o.payload);
+          if (r) ({ mutations, erased } = mergeMutation(mutations, erased, r.targetId, r.patch));
         }
       }
-      this.setState({ ops: seeded.slice(-MAX_OPS), erased });
+      this.setState({ ops: seeded.slice(-MAX_OPS), erased, mutations });
       return;
     }
     if (msg.type === "error") {
@@ -261,12 +345,26 @@ export class WhiteboardConnection {
       return;
     }
     if (msg.type === "clear") {
-      this.setState({ ops: [], cursors: {}, erased: new Set<string>() });
+      this.setState({
+        ops: [],
+        cursors: {},
+        erased: new Set<string>(),
+        mutations: new Map<string, ObjMutation>(),
+      });
       return;
     }
     if (msg.type === "erase") {
       const t = eraseTargetId(msg.payload);
       if (t) this.setState({ erased: new Set([...this.state.erased, t]) });
+      return;
+    }
+    if (msg.type === "modify") {
+      const r = readModify(msg.payload);
+      if (r) {
+        this.setState(
+          mergeMutation(this.state.mutations, this.state.erased, r.targetId, r.patch),
+        );
+      }
       return;
     }
     if (msg.type === "cursor") {
@@ -314,10 +412,22 @@ export class WhiteboardConnection {
     // Local echo (the DO broadcasts only to OTHER peers).
     const stamped: WhiteboardOp = { ...op, ts: this.deps.now() };
     if (op.type === "clear") {
-      this.setState({ ops: [], cursors: {}, erased: new Set<string>() });
+      this.setState({
+        ops: [],
+        cursors: {},
+        erased: new Set<string>(),
+        mutations: new Map<string, ObjMutation>(),
+      });
     } else if (op.type === "erase") {
       const t = eraseTargetId(op.payload);
       if (t) this.setState({ erased: new Set([...this.state.erased, t]) });
+    } else if (op.type === "modify") {
+      const r = readModify(op.payload);
+      if (r) {
+        this.setState(
+          mergeMutation(this.state.mutations, this.state.erased, r.targetId, r.patch),
+        );
+      }
     } else if (PERSISTENT.has(op.type)) {
       this.appendOp(stamped);
     }

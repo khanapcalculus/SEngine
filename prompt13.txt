@@ -1,0 +1,38 @@
+I have reviewed the Gradebook, AI Tutor, Schedule, and Platform Settings tabs. Just like the HR and Admissions modules, these appear to be isolated, static UI components without the necessary backend engines that define a real LMS. 
+
+Please answer the following architectural questions with actual backend code, database schemas, or API routes. Do not give me conceptual explanations or frontend React state:
+
+1. The Scheduling Engine & WebSocket Provisioning
+In the Schedule tab, when I click 'Schedule Session' for Biology, where is the backend transaction that:
+A) Queries the database to ensure the assigned teacher doesn't have a time conflict?
+B) Automatically provisions a secure, unique Room ID for our Cloudflare Worker whiteboard?
+C) Generates the specific 'Join Class' link that will appear on the student's dashboard at the scheduled time?
+
+2. The Gradebook Audit Trail & Automated Calculations
+A real ERP requires strict academic integrity. In the Gradebook, if a teacher changes a student's grade from a 'B' to an 'A+', show me the database trigger or backend controller that logs this change in an immutable Audit Table (tracking who changed it, when, and the previous value). Furthermore, where is the background cron job or database view that automatically recalculates the student's cumulative GPA and updates their official transcript?
+
+3. AI Tutor Context Injection (Gemma 4)
+For the AI Tutor tab, the UI has an 'Optional whiteboard context' field. How does this actually work under the hood? Show me the exact API route where the server fetches the live WebSocket stroke data/JSON from the Cloudflare Durable Object, parses it into an image or text vector, and securely injects it into the Gemma 4 API prompt. 
+
+4. Multi-Tenant Platform Settings
+The Platform Settings page says a management UI for locales and grading scales is 'planned'. I need it built. Show me the exact PostgreSQL/database schema for the organizations or tenants table that stores these global settings, and show me the middleware that forces every single API request on this platform to scope its database queries to the user's specific organization_id.
+
+We are building a functional backend engine, not a mockup. Which of these four backend systems should we architect and wire up first?
+
+Additionally, I need you to create a comprehensive database seed script or write a bulk-import data migration file to populate the system with a complete pool of demo test users. This will allow us to immediately stress-test your backend logic, pagination, role-based filters, and cross-module tracking. 
+
+Please construct the data layer to inject exactly these 24 diverse accounts:
+1. Super Admin: 
+   - Network Super Admin (admin@network.com)
+2. Tutors (3): 
+   - Amjath (amjath@lcc.com, Mathematics)
+   - Omer (omer@lcc.com, Business)
+   - Sneha (sneha@lcc.com, Chemistry)
+3. Students (10): 
+   - Raj (raj@lcc.com, Cohort 2026)
+   - Sovia (sovia@lcc.com, Cohort 2026)
+   - Leo, Mia, Ethan, Chloe, Noah, Ava, Liam, and Zoe (all with @lcc.com emails across cohorts 2026-2028)
+4. Operations Staff (10): 
+   - 10 distinct staff members to fill out our core ERP operational roles: Marcus (HR), Elena (Admissions), David (IT Support), Sarah (Counselor), James (Billing), Priya (Curriculum), Tom (Facilities), Anita (Payroll), Carlos (Marketing), and Diana (Compliance).
+
+Please provide the exact seed code execution command (e.g., node seed.js or prisma db seed) so I can verify that these 24 live, role-authenticated test profiles appear dynamically inside our dashboard data tables!

@@ -20,6 +20,7 @@ import { assertClassAccess } from "../../../../../modules/lms/membership.service
 import { getGemmaClient } from "../../../../../modules/lms/gemma.factory";
 import { runDerivation } from "../../../../../modules/lms/derivation.service";
 import { appendAiDerivation } from "../../../../../modules/lms/discussion.service";
+import { fetchBoardContext } from "../../../../../modules/lms/board_context";
 
 export const runtime = "nodejs";
 
@@ -42,7 +43,18 @@ export async function POST(req: Request): Promise<Response> {
     // 404 (ValidationError) if the class doesn't exist.
     await assertClassAccess(getDb(), ctx, input.classId);
 
-    const result = await runDerivation(getGemmaClient(), input);
+    // Prefer the live board read straight from the Durable Object over whatever
+    // the client sent; fall back to the client snapshot if the read is down.
+    const live = await fetchBoardContext(input.classId, {
+      userId: ctx.userId,
+      role: ctx.role,
+      canDraw: true,
+    });
+    const derivationInput = live?.text
+      ? { ...input, whiteboardContext: live.text }
+      : input;
+
+    const result = await runDerivation(getGemmaClient(), derivationInput);
 
     // Persist into the class discussion so it stays saved for students.
     // Best-effort: a failed save must never lose the generated derivation, so
@@ -51,7 +63,7 @@ export async function POST(req: Request): Promise<Response> {
     try {
       const saved = await appendAiDerivation(getDb(), ctx, {
         classId: input.classId,
-        problem: input.whiteboardContext,
+        problem: derivationInput.whiteboardContext,
         derivation: result.derivation,
         model: result.model,
       });

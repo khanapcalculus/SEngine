@@ -50,6 +50,7 @@ export async function gradeEnrollment(
         status: enrollments.status,
         classId: enrollments.classId,
         branchId: classes.branchId,
+        previousGrade: enrollments.finalGrade, // captured BEFORE the update for the audit trail
       })
       .from(enrollments)
       .innerJoin(classes, eq(enrollments.classId, classes.id))
@@ -100,6 +101,10 @@ export async function gradeEnrollment(
       })
       .where(eq(enrollments.id, row.id));
 
+    // Immutable audit row capturing WHO (actorId), WHEN (createdAt, stamped by
+    // writeAudit), the PREVIOUS value, and the new value — the academic-integrity
+    // trail. The audit table is append-only (no update/delete path exists).
+    const from = row.previousGrade ?? "ungraded";
     await writeAudit(tx, {
       actorId: ctx.userId,
       orgId: ctx.orgId,
@@ -107,7 +112,8 @@ export async function gradeEnrollment(
       action: "enrollment.grade",
       entityType: "enrollment",
       entityId: row.id,
-      summary: `Graded enrollment ${row.id} as ${input.finalGrade}`,
+      summary: `Grade change on enrollment ${row.id}: ${from} → ${input.finalGrade}`,
+      metadata: { previousGrade: row.previousGrade, newGrade: input.finalGrade },
     });
 
     return {

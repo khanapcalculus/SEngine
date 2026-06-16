@@ -224,6 +224,77 @@ describe("erase (object eraser)", () => {
   });
 });
 
+describe("modify (transform / restyle / delete)", () => {
+  async function openConn(over?: Partial<ConnectionDeps>) {
+    const conn = new WhiteboardConnection("c1", makeDeps(over));
+    await conn.connect();
+    socket.emitOpen();
+    return conn;
+  }
+
+  it("a live modify records the transform without touching ops", async () => {
+    const conn = await openConn();
+    socket.emitMessage({ type: "stroke", payload: { id: "A" } });
+    socket.emitMessage({ type: "modify", payload: { targetId: "A", m: [2, 0, 0, 2, 0.1, 0.1] } });
+    expect(conn.getState().ops).toHaveLength(1);
+    expect(conn.getState().mutations.get("A")?.m).toEqual([2, 0, 0, 2, 0.1, 0.1]);
+  });
+
+  it("merges partial patches (restyle keeps a prior transform)", async () => {
+    const conn = await openConn();
+    socket.emitMessage({ type: "modify", payload: { targetId: "A", m: [2, 0, 0, 2, 0, 0] } });
+    socket.emitMessage({ type: "modify", payload: { targetId: "A", style: { color: "#f00" } } });
+    const mut = conn.getState().mutations.get("A");
+    expect(mut?.m).toEqual([2, 0, 0, 2, 0, 0]);
+    expect(mut?.style).toEqual({ color: "#f00" });
+  });
+
+  it("modify deleted toggles the erased set both ways", async () => {
+    const conn = await openConn();
+    socket.emitMessage({ type: "modify", payload: { targetId: "A", deleted: true } });
+    expect(conn.getState().erased.has("A")).toBe(true);
+    socket.emitMessage({ type: "modify", payload: { targetId: "A", deleted: false } });
+    expect(conn.getState().erased.has("A")).toBe(false);
+  });
+
+  it("seeds mutations from history replay", async () => {
+    const conn = await openConn();
+    socket.emitMessage({
+      type: "history",
+      ops: [
+        { type: "stroke", payload: { id: "A" } },
+        { type: "modify", payload: { targetId: "A", m: [1, 0, 0, 1, 0.2, 0] } },
+        { type: "modify", payload: { targetId: "A", deleted: true } },
+      ],
+    });
+    expect(conn.getState().mutations.get("A")?.m).toEqual([1, 0, 0, 1, 0.2, 0]);
+    expect(conn.getState().erased.has("A")).toBe(true);
+  });
+
+  it("sendOp(modify) sends + echoes when canDraw, blocked when view-only", async () => {
+    const conn = await openConn();
+    expect(conn.sendOp({ type: "modify", payload: { targetId: "Z", m: [1, 0, 0, 1, 0.5, 0.5] } })).toBe(true);
+    expect(JSON.parse(socket.sent[0])).toMatchObject({ type: "modify", payload: { targetId: "Z" } });
+    expect(conn.getState().mutations.get("Z")?.m).toEqual([1, 0, 0, 1, 0.5, 0.5]);
+
+    const viewer = await (async () => {
+      socket = new FakeSocket();
+      const c = new WhiteboardConnection("c1", makeDeps({ fetchToken: vi.fn(async () => ({ ...TOKEN, canDraw: false })) }));
+      await c.connect();
+      socket.emitOpen();
+      return c;
+    })();
+    expect(viewer.sendOp({ type: "modify", payload: { targetId: "Q", deleted: true } })).toBe(false);
+  });
+
+  it("clear resets mutations", async () => {
+    const conn = await openConn();
+    socket.emitMessage({ type: "modify", payload: { targetId: "A", m: [2, 0, 0, 2, 0, 0] } });
+    socket.emitMessage({ type: "clear" });
+    expect(conn.getState().mutations.size).toBe(0);
+  });
+});
+
 describe("sendOp", () => {
   async function openConn(over?: Partial<ConnectionDeps>) {
     const conn = new WhiteboardConnection("c1", makeDeps(over));

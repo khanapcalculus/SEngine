@@ -32,18 +32,32 @@ export interface Size {
 
 /** Every tool the board exposes. */
 export type Tool =
+  | "select"
+  | "pan"
   | "pen"
   | "line"
   | "rect"
   | "ellipse"
   | "arrow"
+  | "arc"
+  | "polygon"
+  | "frame"
   | "text"
   | "math"
   | "image"
   | "pdf"
   | "erase";
 
-export type ShapeKind = "line" | "arrow" | "rect" | "ellipse" | "text" | "image";
+export type ShapeKind =
+  | "line"
+  | "arrow"
+  | "rect"
+  | "ellipse"
+  | "arc"
+  | "polygon"
+  | "frame"
+  | "text"
+  | "image";
 
 /** A straight line or an arrow (arrowhead derived at render time). */
 export interface SegmentShape {
@@ -64,6 +78,8 @@ export interface BoxShape {
   color: string;
   width: number;
   fill?: boolean;
+  /** Explicit fill colour; when absent and `fill`, the stroke colour is used. */
+  fillColor?: string;
 }
 
 /** A plain text label anchored at its top-left (x,y). */
@@ -88,7 +104,63 @@ export interface ImageShape {
   h: number;
 }
 
-export type ShapePayload = SegmentShape | BoxShape | TextShape | ImageShape;
+/**
+ * A circular arc: center (cx,cy) normalized, radius `r` a normalized scalar
+ * (rendered rx=r·w, ry=r·h so it stretches with the viewport like an ellipse),
+ * swept from `a0` to `a1` DEGREES (clockwise in screen space).
+ */
+export interface ArcShape {
+  id?: string;
+  kind: "arc";
+  cx: number;
+  cy: number;
+  r: number;
+  a0: number;
+  a1: number;
+  color: string;
+  width: number;
+}
+
+/**
+ * A regular polygon or star about (cx,cy) with normalized radius `r`, `sides`
+ * points, rotated `rot` degrees. When `star`, vertices alternate between `r`
+ * and an inner radius.
+ */
+export interface PolygonShape {
+  id?: string;
+  kind: "polygon";
+  cx: number;
+  cy: number;
+  r: number;
+  sides: number;
+  rot: number;
+  star: boolean;
+  color: string;
+  width: number;
+  fill?: boolean;
+  fillColor?: string;
+}
+
+/** A named work region; objects inside it export together as one PDF page. */
+export interface FrameShape {
+  id?: string;
+  kind: "frame";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label: string;
+  color: string;
+}
+
+export type ShapePayload =
+  | SegmentShape
+  | BoxShape
+  | TextShape
+  | ImageShape
+  | ArcShape
+  | PolygonShape
+  | FrameShape;
 
 /** A LaTeX equation rendered with KaTeX, anchored at its top-left (x,y). */
 export interface EquationPayload {
@@ -149,6 +221,7 @@ export function asShape(payload: unknown): ShapePayload | null {
         color,
         width,
         fill: !!p.fill,
+        ...(typeof p.fillColor === "string" ? { fillColor: p.fillColor } : {}),
       };
     case "text":
       if (
@@ -178,9 +251,130 @@ export function asShape(payload: unknown): ShapePayload | null {
         return null;
       }
       return { id, kind: "image", url: p.url, x: p.x, y: p.y, w: p.w, h: p.h };
+    case "arc":
+      if (
+        typeof p.cx !== "number" ||
+        typeof p.cy !== "number" ||
+        typeof p.r !== "number"
+      ) {
+        return null;
+      }
+      return {
+        id,
+        kind: "arc",
+        cx: p.cx,
+        cy: p.cy,
+        r: Math.abs(p.r),
+        a0: num(p.a0, 0),
+        a1: num(p.a1, 360),
+        color,
+        width,
+      };
+    case "polygon":
+      if (
+        typeof p.cx !== "number" ||
+        typeof p.cy !== "number" ||
+        typeof p.r !== "number"
+      ) {
+        return null;
+      }
+      return {
+        id,
+        kind: "polygon",
+        cx: p.cx,
+        cy: p.cy,
+        r: Math.abs(p.r),
+        sides: Math.max(3, Math.min(24, Math.round(num(p.sides, 5)))),
+        rot: num(p.rot, 0),
+        star: !!p.star,
+        color,
+        width,
+        fill: !!p.fill,
+        ...(typeof p.fillColor === "string" ? { fillColor: p.fillColor } : {}),
+      };
+    case "frame":
+      if (
+        typeof p.x !== "number" ||
+        typeof p.y !== "number" ||
+        typeof p.w !== "number" ||
+        typeof p.h !== "number"
+      ) {
+        return null;
+      }
+      return {
+        id,
+        kind: "frame",
+        x: p.x,
+        y: p.y,
+        w: p.w,
+        h: p.h,
+        label: str(p.label, "Frame"),
+        color: str(p.color, color),
+      };
     default:
       return null;
   }
+}
+
+/** Title-bar height (px) drawn above a frame; also its grab strip. */
+export const FRAME_LABEL_PX = 22;
+
+/**
+ * Per-axis NORMALIZED radius factors that render to an ISOTROPIC (true) circle.
+ *
+ * The board maps normalized x→[0,w] and y→[0,h], so a single normalized radius
+ * `r` would draw as an ellipse squished by the viewport aspect. We instead anchor
+ * the radius to the SMALLER pixel dimension (`ref = min(w,h)`): the pixel radius
+ * is `r·ref` on BOTH axes, so circles/polygons/arcs stay round on any aspect.
+ * Falls back to the legacy isotropic-in-normalized-space behaviour when no size
+ * is supplied (keeps pure callers/tests working).
+ */
+export function radiusFactors(r: number, size?: Size): { rx: number; ry: number } {
+  if (!size || !size.w || !size.h) return { rx: r, ry: r };
+  const ref = Math.min(size.w, size.h);
+  const rPx = r * ref;
+  return { rx: rPx / size.w, ry: rPx / size.h };
+}
+
+/**
+ * Sample an arc into normalized points (for both the polyline render and
+ * hit-testing). `a0`/`a1` are degrees; the sweep goes the short way a0→a1.
+ * `size` makes the arc circular (not elliptical) on non-square viewports.
+ */
+export function arcPoints(s: ArcShape, size?: Size, segments = 64): Pt[] {
+  const a0 = (s.a0 * Math.PI) / 180;
+  const a1 = (s.a1 * Math.PI) / 180;
+  const span = a1 - a0;
+  const n = Math.max(2, Math.ceil((Math.abs(span) / (2 * Math.PI)) * segments));
+  const { rx, ry } = radiusFactors(s.r, size);
+  const out: Pt[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = a0 + (span * i) / n;
+    out.push({ x: s.cx + rx * Math.cos(t), y: s.cy + ry * Math.sin(t) });
+  }
+  return out;
+}
+
+/**
+ * The closed vertex ring of a polygon/star in normalized points. `size` keeps
+ * regular polygons regular (equal pixel radius) instead of aspect-compressed.
+ */
+export function polygonPoints(s: PolygonShape, size?: Size): Pt[] {
+  const sides = Math.max(3, Math.round(s.sides));
+  const rot = (s.rot * Math.PI) / 180;
+  const { rx, ry } = radiusFactors(s.r, size);
+  const { rx: irx, ry: iry } = radiusFactors(s.r * 0.45, size); // star waist
+  const out: Pt[] = [];
+  const count = s.star ? sides * 2 : sides;
+  for (let i = 0; i < count; i++) {
+    const useInner = s.star && i % 2 === 1;
+    const ax = useInner ? irx : rx;
+    const ay = useInner ? iry : ry;
+    // Start at the top (−90°) so polygons sit upright.
+    const a = rot - Math.PI / 2 + (i * Math.PI * 2) / count;
+    out.push({ x: s.cx + ax * Math.cos(a), y: s.cy + ay * Math.sin(a) });
+  }
+  return out;
 }
 
 /** Narrow an opaque `equation` payload, else null. */
@@ -224,7 +418,23 @@ export function shapeBBox(s: ShapePayload, size?: Size): BBox {
       return { x, y, w: Math.abs(s.end.x - s.start.x), h: Math.abs(s.end.y - s.start.y) };
     }
     case "image":
+    case "frame":
       return { x: s.x, y: s.y, w: s.w, h: s.h };
+    case "arc":
+    case "polygon": {
+      const pts = s.kind === "arc" ? arcPoints(s, size) : polygonPoints(s, size);
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const p of pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
     case "text": {
       // fontSize is px; approximate extent and convert to normalized if we know
       // the surface size (otherwise return a zero-size anchor box).
@@ -334,6 +544,55 @@ function hitTextBox(
   );
 }
 
+/** Min pixel distance from `pPx` to a normalized polyline (open). */
+function distToPolyline(pts: Pt[], pPx: { x: number; y: number }, size: Size): number {
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    best = Math.min(best, distToSegment(pPx, toPx(pts[i], size), toPx(pts[i + 1], size)));
+  }
+  return best;
+}
+
+/** Even-odd point-in-polygon test in pixel space. */
+function pointInPolygon(pts: Pt[], pPx: { x: number; y: number }, size: Size): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = toPx(pts[i], size);
+    const b = toPx(pts[j], size);
+    const hit =
+      a.y > pPx.y !== b.y > pPx.y &&
+      pPx.x < ((b.x - a.x) * (pPx.y - a.y)) / (b.y - a.y || 1e-9) + a.x;
+    if (hit) inside = !inside;
+  }
+  return inside;
+}
+
+function hitArc(s: ArcShape, pPx: { x: number; y: number }, size: Size): boolean {
+  return distToPolyline(arcPoints(s, size), pPx, size) <= HIT_TOLERANCE_PX + s.width / 2;
+}
+
+function hitPolygon(s: PolygonShape, pPx: { x: number; y: number }, size: Size): boolean {
+  const ring = polygonPoints(s, size);
+  const closed = [...ring, ring[0]];
+  if (distToPolyline(closed, pPx, size) <= HIT_TOLERANCE_PX + s.width / 2) return true;
+  return s.fill ? pointInPolygon(ring, pPx, size) : false;
+}
+
+/** A frame is grabbed by its border band or its title strip — never its interior. */
+function hitFrame(s: FrameShape, pPx: { x: number; y: number }, size: Size): boolean {
+  const x0 = s.x * size.w;
+  const y0 = s.y * size.h;
+  const x1 = (s.x + s.w) * size.w;
+  const y1 = (s.y + s.h) * size.h;
+  const tol = HIT_TOLERANCE_PX + 2;
+  if (pPx.x >= x0 - tol && pPx.x <= x1 + tol && pPx.y >= y0 - FRAME_LABEL_PX - tol && pPx.y <= y0) {
+    return true; // title strip
+  }
+  const nearV = (Math.abs(pPx.x - x0) <= tol || Math.abs(pPx.x - x1) <= tol) && pPx.y >= y0 - tol && pPx.y <= y1 + tol;
+  const nearH = (Math.abs(pPx.y - y0) <= tol || Math.abs(pPx.y - y1) <= tol) && pPx.x >= x0 - tol && pPx.x <= x1 + tol;
+  return nearV || nearH;
+}
+
 /**
  * Does the normalized point `p` hit op `op` on a `size`-pixel surface?
  * Returns false for ops we can't narrow (legacy/unknown payloads).
@@ -373,6 +632,12 @@ export function hitTest(
         return hitBox(s, pPx, size);
       case "image":
         return hitImage(s, pPx, size);
+      case "arc":
+        return hitArc(s, pPx, size);
+      case "polygon":
+        return hitPolygon(s, pPx, size);
+      case "frame":
+        return hitFrame(s, pPx, size);
       case "text":
         return hitTextBox({ x: s.x, y: s.y }, s.text, s.fontSize, pPx, size);
     }

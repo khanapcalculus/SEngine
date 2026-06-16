@@ -14,6 +14,15 @@ export async function uploadBoardImage(
   blob: Blob,
   filename: string,
 ): Promise<string> {
+  return (await uploadBoardImageDetailed(classId, blob, filename)).url;
+}
+
+/** Like uploadBoardImage but also returns the Blob storage key (pathname). */
+export async function uploadBoardImageDetailed(
+  classId: string,
+  blob: Blob,
+  filename: string,
+): Promise<{ url: string; storageKey: string }> {
   const form = new FormData();
   // Name the part "file" (the route reads form.get("file")). Provide a filename.
   form.append("file", blob, filename);
@@ -26,7 +35,7 @@ export async function uploadBoardImage(
   if (!res.ok || typeof data.url !== "string") {
     throw new Error(data.error ?? `Upload failed (HTTP ${res.status})`);
   }
-  return data.url;
+  return { url: data.url, storageKey: typeof data.pathname === "string" ? data.pathname : data.url };
 }
 
 /** Natural pixel dimensions of an image blob (for aspect-correct placement). */

@@ -1,6 +1,7 @@
 "use client";
 
 /** Students — enrollment, roster, term promotion, and transcript view (managers). */
+import Link from "next/link";
 import { useDashboard } from "../DashboardProvider";
 import { RoleGuard } from "../_components/RoleGuard";
 import {
@@ -9,7 +10,7 @@ import {
   PromoteStudentForm,
   TranscriptViewer,
 } from "../_components/forms";
-import { Section, Roster, warnStyle } from "../_components/ui";
+import { Section, Roster, warnStyle, dim } from "../_components/ui";
 
 export default function StudentsPage() {
   const { scope, students, classes, flash } = useDashboard();
@@ -35,6 +36,21 @@ export default function StudentsPage() {
           keyOf={(_r, i) => students[i].studentProfileId}
         />
       </Section>
+
+      {students.length > 0 && (
+        <Section title="Student profiles (360°)">
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, display: "grid", gap: 4 }}>
+            {students.map((s) => (
+              <li key={s.studentProfileId}>
+                <Link href={`/dashboard/students/${s.studentProfileId}`} style={{ color: "#7fb0ff" }}>
+                  {s.fullName}
+                </Link>{" "}
+                <span style={dim}>— transcript, fees, credentials, guardians</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
 
       <EnrollStudentForm scope={scope} onDone={flash} />
       <AssignClassForm students={students} classes={classes} onDone={flash} />

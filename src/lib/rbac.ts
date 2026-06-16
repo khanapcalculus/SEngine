@@ -40,11 +40,21 @@ export const NAV_ITEMS: NavItem[] = [
     allowedRoles: ["super_admin"],
   },
   { href: "/dashboard/staff", label: "Staff (HR)", allowedRoles: MANAGERS },
+  { href: "/dashboard/hr", label: "HR Operations", allowedRoles: MANAGERS },
+  { href: "/dashboard/admissions", label: "Admissions", allowedRoles: MANAGERS },
   { href: "/dashboard/students", label: "Students", allowedRoles: MANAGERS },
+  { href: "/dashboard/fees", label: "Fees", allowedRoles: MANAGERS },
+  { href: "/dashboard/alumni", label: "Alumni", allowedRoles: MANAGERS },
+  { href: "/dashboard/guardians", label: "Guardians", allowedRoles: MANAGERS },
   { href: "/dashboard/academics", label: "Gradebook", allowedRoles: MANAGERS },
   {
     href: "/dashboard/tutor",
     label: "AI Tutor",
+    allowedRoles: ["super_admin", "branch_manager", "teacher"],
+  },
+  {
+    href: "/dashboard/schedule",
+    label: "Schedule",
     allowedRoles: ["super_admin", "branch_manager", "teacher"],
   },
   {
@@ -56,6 +66,11 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/dashboard/transcript",
     label: "My Transcript",
     allowedRoles: ["student"],
+  },
+  {
+    href: "/dashboard/children",
+    label: "My Children",
+    allowedRoles: ["parent"],
   },
   {
     href: "/dashboard/whiteboard",

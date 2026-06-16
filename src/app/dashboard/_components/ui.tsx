@@ -338,8 +338,11 @@ export function StaffLifecycleRoster({
 
 export function TenantOverview({
   organizations,
+  renderOrgAction,
 }: {
   organizations: TenantOrganization[];
+  /** Optional per-org footer (e.g. an "Add branch" control). */
+  renderOrgAction?: (org: TenantOrganization) => ReactNode;
 }) {
   if (organizations.length === 0) {
     return <p style={dim}>No organizations found yet.</p>;
@@ -362,6 +365,7 @@ export function TenantOverview({
               ))}
             </ul>
           )}
+          {renderOrgAction && <div style={{ marginTop: 10 }}>{renderOrgAction(org)}</div>}
         </div>
       ))}
     </div>

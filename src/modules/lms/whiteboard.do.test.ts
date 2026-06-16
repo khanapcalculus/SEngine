@@ -64,19 +64,58 @@ vi.spyOn(Date, "now").mockReturnValue(NOW);
 
 import { WhiteboardRoom, type WhiteboardOp } from "./whiteboard.do";
 
-/** Fake DO state tracking accepted sockets. */
-function makeState() {
+/** In-memory fake of the DO transactional storage KV surface. */
+function makeStorage(backing: Map<string, unknown> = new Map()) {
+  return {
+    backing,
+    async get(key: string) {
+      return backing.get(key);
+    },
+    async put(key: string, value: unknown) {
+      backing.set(key, value);
+    },
+    async delete(key: string) {
+      return backing.delete(key);
+    },
+    async deleteAll() {
+      backing.clear();
+    },
+    async list(options?: { prefix?: string }) {
+      const out = new Map<string, unknown>();
+      for (const [k, v] of backing) {
+        if (!options?.prefix || k.startsWith(options.prefix)) out.set(k, v);
+      }
+      return out;
+    },
+  };
+}
+
+/**
+ * Fake DO state tracking accepted sockets. `storage` is shared/injectable so a
+ * test can simulate hibernation: build a fresh WhiteboardRoom over the SAME
+ * backing map and assert the op log rehydrates.
+ */
+function makeState(storage = makeStorage()) {
   const sockets: FakeWS[] = [];
   return {
     sockets,
+    storage,
     acceptWebSocket(ws: FakeWS) {
       sockets.push(ws);
     },
     getWebSockets() {
       return sockets;
     },
+    // The real runtime defers requests until fn resolves; our tests await
+    // construction-driven hydration via flushMicrotasks() before asserting.
+    blockConcurrencyWhile(fn: () => Promise<void>) {
+      void fn();
+    },
   };
 }
+
+/** Let queued microtasks (the constructor's blockConcurrencyWhile) settle. */
+const flush = () => new Promise((r) => setTimeout(r, 0));
 
 function upgradeReq(userId?: string): Request {
   const headers: Record<string, string> = { Upgrade: "websocket" };
@@ -273,5 +312,110 @@ describe("WhiteboardRoom sender attribution", () => {
       b.sent.find((m) => m.includes('"stroke"'))!,
     );
     expect(received.senderId).toBeUndefined();
+  });
+});
+
+describe("WhiteboardRoom durable persistence", () => {
+  it("survives hibernation: a fresh room over the same storage replays prior ops", async () => {
+    const storage = makeStorage();
+
+    // First lifetime: a peer draws two ops, then everyone leaves (DO evicted).
+    const s1 = makeState(storage);
+    const r1 = new WhiteboardRoom(s1 as any, {});
+    await flush();
+    await r1.fetch(upgradeReq("user-ada"));
+    await r1.webSocketMessage(
+      s1.sockets[0] as any,
+      JSON.stringify({ type: "stroke", payload: { id: "a" } }),
+    );
+    await r1.webSocketMessage(
+      s1.sockets[0] as any,
+      JSON.stringify({ type: "shape", payload: { id: "b" } }),
+    );
+
+    // Second lifetime: a brand-new room instance over the SAME storage. A late
+    // joiner must still receive the full board.
+    const s2 = makeState(storage);
+    const r2 = new WhiteboardRoom(s2 as any, {});
+    await flush();
+    await r2.fetch(upgradeReq("user-late"));
+    const frame = JSON.parse(
+      s2.sockets[0].sent.find((m) => m.includes('"history"'))!,
+    );
+    expect(frame.ops).toHaveLength(2);
+    expect(frame.ops[0].payload.id).toBe("a");
+    expect(frame.ops[1].payload.id).toBe("b");
+  });
+
+  it("persists modify/erase ops so edits survive a rejoin", async () => {
+    const storage = makeStorage();
+    const s1 = makeState(storage);
+    const r1 = new WhiteboardRoom(s1 as any, {});
+    await flush();
+    await r1.fetch(upgradeReq("user-ada"));
+    await r1.webSocketMessage(
+      s1.sockets[0] as any,
+      JSON.stringify({ type: "stroke", payload: { id: "a" } }),
+    );
+    await r1.webSocketMessage(
+      s1.sockets[0] as any,
+      JSON.stringify({ type: "modify", payload: { targetId: "a", m: [1, 0, 0, 1, 0.1, 0] } }),
+    );
+
+    const s2 = makeState(storage);
+    const r2 = new WhiteboardRoom(s2 as any, {});
+    await flush();
+    await r2.fetch(upgradeReq("user-late"));
+    const frame = JSON.parse(
+      s2.sockets[0].sent.find((m) => m.includes('"history"'))!,
+    );
+    expect(frame.ops).toHaveLength(2);
+    expect(frame.ops[1].type).toBe("modify");
+  });
+
+  it("serves a text context dump for the AI tutor (x-rtc-op: context)", async () => {
+    const storage = makeStorage();
+    const s1 = makeState(storage);
+    const r1 = new WhiteboardRoom(s1 as any, {});
+    await flush();
+    await r1.fetch(upgradeReq("user-ada"));
+    await r1.webSocketMessage(
+      s1.sockets[0] as any,
+      JSON.stringify({ type: "equation", payload: { id: "e1", latex: "E=mc^2" } }),
+    );
+    await r1.webSocketMessage(
+      s1.sockets[0] as any,
+      JSON.stringify({ type: "shape", payload: { id: "t1", kind: "text", text: "Newton's 2nd law" } }),
+    );
+
+    const res = await r1.fetch(
+      new Request("http://do/", { headers: { "x-rtc-op": "context" } }),
+    );
+    expect(res.status).toBe(200);
+    const body = JSON.parse((res as any).body);
+    expect(body.opCount).toBe(2);
+    expect(body.text).toContain("E=mc^2");
+    expect(body.text).toContain("Newton's 2nd law");
+  });
+
+  it("'clear' wipes durable storage, not just memory", async () => {
+    const storage = makeStorage();
+    const s1 = makeState(storage);
+    const r1 = new WhiteboardRoom(s1 as any, {});
+    await flush();
+    await r1.fetch(upgradeReq());
+    await r1.webSocketMessage(
+      s1.sockets[0] as any,
+      JSON.stringify({ type: "stroke", payload: {} }),
+    );
+    await r1.webSocketMessage(s1.sockets[0] as any, JSON.stringify({ type: "clear" }));
+    expect(storage.backing.size).toBe(0);
+
+    // A new lifetime sees an empty board (no history frame).
+    const s2 = makeState(storage);
+    const r2 = new WhiteboardRoom(s2 as any, {});
+    await flush();
+    await r2.fetch(upgradeReq());
+    expect(s2.sockets[0].sent.find((m) => m.includes('"history"'))).toBeUndefined();
   });
 });

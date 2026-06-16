@@ -14,9 +14,9 @@ compatibility_flags = ["nodejs_compat"]
 name = "WHITEBOARD_ROOM"
 class_name = "WhiteboardRoom"
 
-# WhiteboardRoom holds no SQL storage yet (in-memory replay buffer only), so a
-# new_classes migration is sufficient. Switch to new_sqlite_classes if/when the
-# board is persisted to DO storage.
+# WhiteboardRoom persists its op log to the DO's transactional storage (KV API)
+# so a board survives hibernation/eviction and rejoining peers replay the full
+# state. new_sqlite_classes provisions that backing store.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["WhiteboardRoom"]

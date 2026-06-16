@@ -1,6 +1,7 @@
 "use client";
 
 /** Organizations — cross-tenant management + provisioning (super_admin only). */
+import { useState } from "react";
 import { useDashboard } from "../DashboardProvider";
 import { RoleGuard } from "../_components/RoleGuard";
 import {
@@ -16,6 +17,7 @@ import {
   tenantCard,
   labelStyle,
   inp,
+  type TenantOrganization,
 } from "../_components/ui";
 
 export default function OrganizationsPage() {
@@ -82,7 +84,12 @@ export default function OrganizationsPage() {
           </label>
         </div>
 
-        <TenantOverview organizations={tenantTree} />
+        <TenantOverview
+          organizations={tenantTree}
+          renderOrgAction={(org) => (
+            <OrgBranchAdder org={org} onCreated={handleBranchCreated} />
+          )}
+        />
       </Section>
 
       <Section title="Provision tenants">
@@ -102,5 +109,50 @@ export default function OrganizationsPage() {
         </div>
       </Section>
     </RoleGuard>
+  );
+}
+
+/**
+ * Per-organization "Add branch" affordance shown inside each org card in the
+ * overview. Previously the only way to add a branch was the single global form
+ * bound to the org dropdown, so adding branches to an existing org was easy to
+ * miss; this binds directly to `org.id`.
+ */
+function OrgBranchAdder({
+  org,
+  onCreated,
+}: {
+  org: TenantOrganization;
+  onCreated: (branch: { id: string; orgId: string; location: string }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          fontSize: 12,
+          padding: "4px 10px",
+          borderRadius: 7,
+          border: "1px solid rgba(120,130,170,0.4)",
+          background: "transparent",
+          color: "inherit",
+          cursor: "pointer",
+        }}
+      >
+        {open ? "Cancel" : "+ Add branch"}
+      </button>
+      {open && (
+        <CreateBranchForm
+          orgId={org.id}
+          orgName={org.name}
+          onCreated={(b) => {
+            onCreated(b);
+            setOpen(false);
+          }}
+        />
+      )}
+    </div>
   );
 }

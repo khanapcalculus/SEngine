@@ -16,6 +16,7 @@ import {
   isManager,
   isSuperAdmin,
 } from "./_components/ui";
+import { StudentSessionsWidget } from "./_components/StudentSessionsWidget";
 import type { Role } from "../../lib/rbac";
 
 const ALL_ROLES: Role[] = [
@@ -97,6 +98,8 @@ export default function OverviewPage() {
           )}
         </Section>
       )}
+
+      {me.role === "student" && <StudentSessionsWidget />}
 
       {!isManager(me.role) && (
         <Section title="Welcome">

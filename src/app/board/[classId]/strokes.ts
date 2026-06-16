@@ -27,8 +27,10 @@ export interface StrokePayload {
 export const BG = "#0f1424"; // board background; the eraser paints with this color
 export const DEFAULT_COLOR = "#7fd1ff";
 export const DEFAULT_WIDTH = 4;
-/** Min normalized travel before a move point is recorded (keeps payloads lean). */
-export const MIN_POINT_DELTA = 0.0035;
+/** Min normalized travel before a move point is recorded (keeps payloads lean).
+ *  Kept small so the quadratic-smoothed pen captures fine detail and reads
+ *  fluid rather than faceted; MAX_POINTS still bounds a runaway drag. */
+export const MIN_POINT_DELTA = 0.0015;
 /** Hard cap on points per stroke — a runaway drag can't blow up the payload. */
 export const MAX_POINTS = 1200;
 
@@ -88,6 +90,24 @@ export function isFarEnough(
 ): boolean {
   if (!last) return true;
   return Math.abs(p.x - last.x) >= minDelta || Math.abs(p.y - last.y) >= minDelta;
+}
+
+/**
+ * One pass of 3-point weighted averaging (¼,½,¼) over the interior points,
+ * pinning the endpoints. Dampens hand jitter so the committed pen reads clean,
+ * mirroring the light smoothing pass the jengine board runs on commit. Cheap and
+ * shape-preserving; combine with the quadratic render smoothing in buildSmoothPath.
+ */
+export function smoothStroke(points: Pt[]): Pt[] {
+  if (points.length < 3) return points;
+  const out = points.slice();
+  for (let i = 1; i < points.length - 1; i++) {
+    out[i] = {
+      x: (points[i - 1].x + 2 * points[i].x + points[i + 1].x) / 4,
+      y: (points[i - 1].y + 2 * points[i].y + points[i + 1].y) / 4,
+    };
+  }
+  return out;
 }
 
 /** Pack a finished path into the opaque stroke payload sent over the wire. */
